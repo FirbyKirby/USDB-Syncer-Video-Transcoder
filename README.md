@@ -281,3 +281,25 @@ New in this version — progress and abort
 - How quickly does abort take effect? Within ~500ms in most cases; shutdown may take up to a couple of seconds on some systems
 - Will partial files be left behind? No. Temporary .transcoding* files are removed on abort or failure in [transcoder.process_video()](addons/video_transcoder/transcoder.py:189) and [transcoder.process_video()](addons/video_transcoder/transcoder.py:213)
 - Does batch transcode respect abort? Yes. The active video is stopped immediately and the batch ends; rollback is offered if enabled
+
+## AI assistance and attribution
+
+This project was developed with significant assistance from AI coding tools and large language models. These tools were used to help draft and refine source code and tests, generate documentation, and suggest refactorings and implementation approaches. All AI-assisted outputs were reviewed, edited, and validated by human maintainers; responsibility for the final design and behavior remains with the maintainers.
+
+Provenance and licensing
+- All contributions—whether AI-assisted or human-authored—are provided under the MIT License. See [LICENSE](LICENSE:1).
+- The maintainers take care to avoid incorporating third-party copyrighted material or code with incompatible licenses. If you believe any content infringes your rights or includes non-compliant material, please open an issue so we can investigate and remediate promptly.
+
+Contributor guidance for AI-assisted changes
+- Disclose AI assistance in your pull request description with a brief note (for example: AI-assisted: summary of how the tool was used) and ensure you can explain and justify the changes.
+- Verify that outputs are original and free of material you do not have rights to include; provide links and attribution when adapting code from public sources.
+- Keep commit and PR authors human; do not list AI systems as authors or co-authors. Use normal attribution for human collaborators.
+- Review, run, and test AI-generated code locally before submitting.
+- Avoid including secrets or sensitive data in prompts to third-party AI services.
+
+Acknowledgment
+- We acknowledge the role of modern AI tools in accelerating parts of the development and documentation process.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE:1) for details.
