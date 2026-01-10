@@ -10,7 +10,7 @@ Tip: Transcoding runs automatically. No manual steps needed after installation.
 ## Overview
 
 Why this exists
-- Some video players do not support some common web codecs/containers out of the box (e.g., VP9). This addon ensures downloaded videos play reliably by converting them to compatible formats.
+- Some video players and karaoke applications do not support, or have limited support, for some common web codecs/containers out of the box (e.g., AV1). One such application is [Melody Mania](https://melodymania.org/) based on the Unity Engine. This addon ensures downloaded videos play reliably by converting them to compatible formats.
 
 What it does
 - Transcodes videos to your configured target codec (and applies relevant codec settings and optional limits)
