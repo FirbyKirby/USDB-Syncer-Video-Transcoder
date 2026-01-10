@@ -422,7 +422,11 @@ def _execute_ffmpeg(
         process.wait()
         duration_total = time.time() - start_time
         if process.returncode != 0:
-            slog.error(f"FFMPEG failed after {duration_total:.1f}s with code {process.returncode}")
+            error_desc = _get_exit_code_description(process.returncode)
+            slog.error(
+                f"FFMPEG failed after {duration_total:.1f}s with code {process.returncode} "
+                f"({error_desc})"
+            )
             return False, False
 
         return True, False
@@ -430,6 +434,30 @@ def _execute_ffmpeg(
     except Exception as e:
         slog.error(f"FFMPEG execution error: {e}")
         return False, False
+
+
+def _get_exit_code_description(code: int) -> str:
+    """Return a human-readable description for common exit codes."""
+    # Windows-specific crash codes
+    windows_codes = {
+        0xC0000005: "Access Violation / Segfault",
+        0xC0000374: "Heap Corruption",
+        0xC0000135: "DLL Not Found",
+        0xC0000142: "DLL Initialization Failed",
+        0xC00000FD: "Stack Overflow",
+        0xC0000409: "Stack Buffer Overrun",
+    }
+    
+    # Convert to unsigned 32-bit for comparison if it's negative (signed)
+    unsigned_code = code & 0xFFFFFFFF
+    
+    if unsigned_code in windows_codes:
+        return windows_codes[unsigned_code]
+    
+    if code < 0:
+        return f"Signal {-code}"
+        
+    return "Unknown error"
 
 
 def _safe_unlink(path: Path, retries: int = 15, delay: float = 1.5) -> None:
