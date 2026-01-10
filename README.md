@@ -41,6 +41,29 @@ Steps
    - Linux: ~/.local/share/usdb_syncer/addons
 3) Restart USDB_Syncer. The log will include: Video Transcoder addon loaded. Hook registration occurs in [__init__.py](__init__.py) and uses the USDB Syncer hooks system.
 
+### Alternative installation: `.zip` addon (loaded directly)
+
+USDB Syncer also supports addons distributed as `.zip` files. This is useful if you prefer a single-file install.
+
+Key requirements and behavior
+- Addons can be a Python module, a package folder, **or a `.zip` file** containing one or more Python modules.
+- The file must have a `.zip` extension.
+- Place the `.zip` file **directly** in the USDB_Syncer addons directory (do not extract it).
+- USDB Syncer loads the zip by adding it to `sys.path` (the zip is imported directly and is not unpacked).
+- If the addon is a package, the zip should contain a top-level directory with an `__init__.py` file (standard Python package convention).
+- No special manifest or metadata file is required.
+
+Example layouts
+
+- Single-module addon:
+  - `my_addon.zip` containing `my_addon.py` at the top level
+- Package addon:
+  - `my_addon.zip` containing `my_addon/__init__.py` (and any other package files)
+
+For this repository, a typical zip install would be `video_transcoder.zip` containing `video_transcoder/__init__.py` and the rest of this addon’s Python files under the `video_transcoder/` directory.
+
+After copying the zip into the addons directory, restart USDB_Syncer. You should see the same addon-loaded log message as with a folder install.
+
 ## Configuration
 
 The addon can be configured graphically via **Tools → Transcoder Settings...** in USDB Syncer.
