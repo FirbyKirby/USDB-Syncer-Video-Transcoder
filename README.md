@@ -288,14 +288,18 @@ For information on the release process and how to package the addon, see [docs/R
 
 ## AI assistance and attribution
 
-This project was developed with significant assistance from AI coding tools and large language models. These tools were used to help draft and refine source code and tests, generate documentation, and suggest refactorings and implementation approaches. All AI-assisted outputs were reviewed, edited, and validated by human maintainers; responsibility for the final design and behavior remains with the maintainers.
+This project was developed with significant assistance from AI coding tools and large language models. These tools were used to help draft and refine source code and tests, generate documentation, and suggest refactorings and implementation approaches.
+
+Notably, this repository used [Kilo Code by Kilocode.ai](https://kilocode.ai) as an AI coding assistant during development and documentation work.
+
+All AI-assisted outputs were reviewed, edited, and validated by human maintainers; responsibility for the final design and behavior remains with the maintainers.
 
 Provenance and licensing
 - All contributions—whether AI-assisted or human-authored—are provided under the MIT License. See [LICENSE](LICENSE:1).
 - The maintainers take care to avoid incorporating third-party copyrighted material or code with incompatible licenses. If you believe any content infringes your rights or includes non-compliant material, please open an issue so we can investigate and remediate promptly.
 
 Contributor guidance for AI-assisted changes
-- Disclose AI assistance in your pull request description with a brief note (for example: AI-assisted: summary of how the tool was used) and ensure you can explain and justify the changes.
+- Disclose AI assistance in your pull request description with a brief note (for example: AI-assisted (Kilo Code / Kilocode.ai): summary of how the tool was used) and ensure you can explain and justify the changes.
 - Verify that outputs are original and free of material you do not have rights to include; provide links and attribution when adapting code from public sources.
 - Keep commit and PR authors human; do not list AI systems as authors or co-authors. Use normal attribution for human collaborators.
 - Review, run, and test AI-generated code locally before submitting.
@@ -303,6 +307,7 @@ Contributor guidance for AI-assisted changes
 
 Acknowledgment
 - We acknowledge the role of modern AI tools in accelerating parts of the development and documentation process.
+- Kilo Code by Kilocode.ai was one of the AI tools used.
 
 ## License
 
