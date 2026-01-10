@@ -282,6 +282,10 @@ New in this version — progress and abort
 - Will partial files be left behind? No. Temporary .transcoding* files are removed on abort or failure in [transcoder.process_video()](transcoder.py:189) and [transcoder.process_video()](transcoder.py:213)
 - Does batch transcode respect abort? Yes. The active video is stopped immediately and the batch ends; rollback is offered if enabled
 
+## Development
+
+For information on the release process and how to package the addon, see [docs/RELEASE.md](docs/RELEASE.md).
+
 ## AI assistance and attribution
 
 This project was developed with significant assistance from AI coding tools and large language models. These tools were used to help draft and refine source code and tests, generate documentation, and suggest refactorings and implementation approaches. All AI-assisted outputs were reviewed, edited, and validated by human maintainers; responsibility for the final design and behavior remains with the maintainers.

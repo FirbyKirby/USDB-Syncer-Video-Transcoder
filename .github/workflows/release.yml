@@ -1,0 +1,54 @@
+name: Release Addon
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Prepare release directory
+        run: |
+          # Create the target directory structure
+          mkdir -p video_transcoder
+          
+          # Copy Python files from root
+          cp *.py video_transcoder/
+          
+          # Copy documentation directory
+          if [ -d "docs" ]; then
+            cp -r docs video_transcoder/
+          fi
+          
+          # Copy LICENSE and README
+          cp LICENSE README.md video_transcoder/
+          
+          # Clean up any unwanted files that might have been caught
+          find video_transcoder -name "__pycache__" -type d -exec rm -rf {} +
+          find video_transcoder -name "*.pyc" -delete
+          find video_transcoder -name "*.pyo" -delete
+          
+          # Explicitly remove excluded files if they exist in the target
+          rm -f video_transcoder/config.json
+          rm -f video_transcoder/docs/RELEASE.md
+
+      - name: Create zip file
+        run: zip -r video_transcoder.zip video_transcoder/
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --draft \
+            --notes "Release ${{ github.ref_name }}" \
+            video_transcoder.zip
