@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
 
-from usdb_syncer.utils import AppPaths
 
 _logger = logging.getLogger(__name__)
 
@@ -106,7 +105,8 @@ class TranscoderConfig:
 
 def get_config_path() -> Path:
     """Return path to config file in USDB Syncer data directory."""
-    return AppPaths.data / "video_transcoder_config.json"
+    from usdb_syncer.utils import AppPaths
+    return AppPaths.db.parent / "video_transcoder_config.json"
 
 
 def load_config() -> TranscoderConfig:
