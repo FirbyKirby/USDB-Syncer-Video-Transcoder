@@ -30,7 +30,7 @@ class BackupSelectionDialog(QtWidgets.QDialog):
         self._update_stats()
 
     def _setup_ui(self) -> None:
-        self.setWindowTitle("Manage Video Backups")
+        self.setWindowTitle("Manage Media Backups")
         self.setWindowIcon(icons.Icon.CHANGES.icon())
         self.resize(800, 500)
         layout = QtWidgets.QVBoxLayout(self)
@@ -73,7 +73,7 @@ class BackupSelectionDialog(QtWidgets.QDialog):
 
         # Warning
         warning_text = (
-            "You can delete backups to reclaim disk space, or restore them to replace active transcoded videos. "
+            "You can delete backups to reclaim disk space, or restore them to replace active transcoded media files. "
             "Both operations are destructive and require confirmation."
         )
             

@@ -40,7 +40,7 @@ class BatchResultsDialog(QDialog):
     ):
         super().__init__(parent)
         self.candidates = candidates
-        # Only show videos that were actually selected for transcoding
+        # Only show media files that were actually selected for transcoding
         self.processed_candidates = [c for c in candidates if c.selected]
         self.summary = summary
         self.aborted = aborted
@@ -73,27 +73,27 @@ class BatchResultsDialog(QDialog):
         rolled_back_count = sum(1 for c in self.processed_candidates if c.status == "rolled_back")
         
         lbl_success = QLabel("✓ Success:")
-        lbl_success.setToolTip("Number of videos successfully transcoded.")
+        lbl_success.setToolTip("Number of media files successfully transcoded.")
         summary_layout.addWidget(lbl_success, 0, 0)
         summary_layout.addWidget(QLabel(f"<b>{success_count}</b>"), 0, 1)
         
         lbl_failed = QLabel("✗ Failed:")
-        lbl_failed.setToolTip("Number of videos that encountered an error during transcoding.")
+        lbl_failed.setToolTip("Number of media files that encountered an error during transcoding.")
         summary_layout.addWidget(lbl_failed, 0, 2)
         summary_layout.addWidget(QLabel(f"<b>{failed_count}</b>"), 0, 3)
         
         lbl_skipped = QLabel("⊙ Skipped:")
-        lbl_skipped.setToolTip("Number of videos that were not selected for transcoding.")
+        lbl_skipped.setToolTip("Number of media files that were not selected for transcoding.")
         summary_layout.addWidget(lbl_skipped, 0, 4)
         summary_layout.addWidget(QLabel(f"<b>{skipped_count}</b>"), 0, 5)
         
         lbl_aborted = QLabel("⊘ Aborted:")
-        lbl_aborted.setToolTip("Number of videos that were cancelled by the user.")
+        lbl_aborted.setToolTip("Number of media files that were cancelled by the user.")
         summary_layout.addWidget(lbl_aborted, 0, 6)
         summary_layout.addWidget(QLabel(f"<b>{aborted_count}</b>"), 0, 7)
 
         lbl_rolled_back = QLabel("↺ Rolled Back:")
-        lbl_rolled_back.setToolTip("Number of videos that were transcoded but then reverted due to abort.")
+        lbl_rolled_back.setToolTip("Number of media files that were transcoded but then reverted due to abort.")
         summary_layout.addWidget(lbl_rolled_back, 0, 8)
         summary_layout.addWidget(QLabel(f"<b>{rolled_back_count}</b>"), 0, 9)
         
@@ -206,7 +206,10 @@ class BatchResultsDialog(QDialog):
             change = "-"
             if c.status == "success" and c.result and c.result.output_path and c.result.output_path.exists():
                 new_size = c.result.output_path.stat().st_size / (1024 * 1024)
-                change = f"{c.current_codec} → {self.summary.target_codec}, {c.current_size_mb:.1f}MB → {new_size:.1f}MB"
+                target_codec = self.summary.target_codec
+                if getattr(c, "media_type", "video") == "audio":
+                    target_codec = self.summary.target_audio_codec
+                change = f"{c.current_codec} → {target_codec}, {c.current_size_mb:.1f}MB → {new_size:.1f}MB"
             self.table.setItem(i, 3, QTableWidgetItem(change))
             
             # Error message
@@ -243,7 +246,11 @@ class BatchResultsDialog(QDialog):
                         c.song_title,
                         c.artist,
                         c.current_codec,
-                        self.summary.target_codec if c.status == "success" else "",
+                        (
+                            (self.summary.target_audio_codec if getattr(c, "media_type", "video") == "audio" else self.summary.target_codec)
+                            if c.status == "success"
+                            else ""
+                        ),
                         f"{c.current_size_mb:.2f}",
                         new_size,
                         f"{c.actual_time_seconds or 0:.1f}",
@@ -260,7 +267,10 @@ class BatchResultsDialog(QDialog):
             change = "-"
             if c.status == "success" and c.result and c.result.output_path and c.result.output_path.exists():
                 new_size = c.result.output_path.stat().st_size / (1024 * 1024)
-                change = f"{c.current_codec} → {self.summary.target_codec}, {c.current_size_mb:.1f}MB → {new_size:.1f}MB"
+                target_codec = self.summary.target_codec
+                if getattr(c, "media_type", "video") == "audio":
+                    target_codec = self.summary.target_audio_codec
+                change = f"{c.current_codec} → {target_codec}, {c.current_size_mb:.1f}MB → {new_size:.1f}MB"
             
             lines.append(f"{c.status}\t{c.song_title}\t{c.artist}\t{change}\t{c.error_message or ''}")
             

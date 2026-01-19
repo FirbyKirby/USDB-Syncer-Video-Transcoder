@@ -1,4 +1,4 @@
-"""Core transcoding engine for the Video Transcoder addon."""
+"""Core transcoding engine for the Transcoder addon."""
 
 from __future__ import annotations
 
@@ -38,6 +38,245 @@ class TranscodeResult:
     aborted: bool = False
 
 
+def process_audio(
+    song: "UsdbSong",
+    media_path: Path,
+    cfg: "TranscoderConfig",
+    slog: "SongLogger",
+    progress_callback: Optional[Callable[[float, float, str, float, float], None]] = None,
+) -> TranscodeResult:
+    """Transcode (or extract+transcode) audio to the configured target audio codec.
+
+    This function is intentionally designed to be safe and consistent with
+    [`process_video()`](transcoder.py:41):
+    - conservative temp-file output (".transcoding")
+    - optional persistent backup behavior
+    - optional verification
+    - SyncMeta updates to avoid re-download loops
+
+    Inputs
+    - Audio-only files (e.g. mp3/m4a/flac/wav)
+    - Video containers with audio streams (e.g. mp4/mkv). In this case the audio
+      stream is extracted and written as audio-only output.
+
+    Normalization
+    - Stage 3: optional audio normalization via FFmpeg filters (loudnorm two-pass or ReplayGain tagging)
+    """
+
+    from .audio_analyzer import analyze_audio
+    from .codecs import get_audio_codec_handler
+    from .audio_normalizer import maybe_apply_audio_normalization
+    from .sync_meta_updater import update_sync_meta_audio
+
+    start_time = time.time()
+
+    # Analyze media for audio stream
+    slog.info(f"Analyzing audio: {media_path.name}")
+    audio_info = analyze_audio(media_path)
+    if not audio_info:
+        return TranscodeResult(
+            success=False,
+            output_path=None,
+            original_backed_up=False,
+            backup_path=None,
+            duration_seconds=0,
+            error_message="Failed to analyze audio stream (no audio stream or ffprobe error)",
+        )
+
+    # Check disk space (same guard as video)
+    if not _check_disk_space(media_path, cfg.general.min_free_space_mb):
+        slog.error(f"Insufficient disk space for audio transcoding. Required: {cfg.general.min_free_space_mb} MB")
+        return TranscodeResult(
+            success=False,
+            output_path=None,
+            original_backed_up=False,
+            backup_path=None,
+            duration_seconds=0,
+            error_message="Insufficient disk space for transcoding",
+        )
+
+    # Select audio codec handler
+    audio_codec = cfg.audio.audio_codec
+    handler = get_audio_codec_handler(audio_codec)
+    if not handler:
+        return TranscodeResult(
+            success=False,
+            output_path=None,
+            original_backed_up=False,
+            backup_path=None,
+            duration_seconds=0,
+            error_message=f"No handler for audio codec: {audio_codec}",
+        )
+
+    # Determine output extension / container
+    new_ext = f".{handler.capabilities().container}"
+    temp_output_path = media_path.with_suffix(f".transcoding{new_ext}")
+
+    # Decide stream copy vs re-encode
+    normalization_requested = bool(cfg.audio.audio_normalization_enabled)
+    container_matches = handler.is_container_compatible(media_path)
+    codec_matches = (audio_info.codec_name.lower() == audio_codec.lower())
+    force_audio = bool(getattr(cfg.audio, "force_transcode_audio", False))
+    stream_copy = (
+        not force_audio
+        and not normalization_requested
+        and container_matches
+        and codec_matches
+    )
+
+    if force_audio and stream_copy:
+        # Defensive: this should not happen due to the condition above, but keep the logic explicit.
+        stream_copy = False
+
+    if force_audio and container_matches and codec_matches and not normalization_requested:
+        slog.info(
+            f"Audio already matches target ({audio_codec}/{handler.capabilities().container}), "
+            "but force_transcode_audio is enabled - proceeding"
+        )
+
+    # Build command
+    try:
+        cmd = handler.build_encode_command(
+            media_path,
+            temp_output_path,
+            cfg,
+            stream_copy=stream_copy,
+        )
+    except ValueError as e:
+        return TranscodeResult(
+            success=False,
+            output_path=None,
+            original_backed_up=False,
+            backup_path=None,
+            duration_seconds=0,
+            error_message=str(e),
+        )
+
+    # Apply normalization filters (Stage 3)
+    # IMPORTANT: must occur before encoding; stream-copy path skips normalization.
+    if normalization_requested:
+        cmd = maybe_apply_audio_normalization(
+            base_cmd=cmd,
+            input_path=media_path,
+            cfg=cfg,
+            slog=slog,
+            stream_copy=stream_copy,
+        )
+
+    slog.debug(f"FFMPEG command (audio): {' '.join(cmd)}")
+
+    # Execute transcode
+    try:
+        success, aborted = _execute_ffmpeg(
+            cmd,
+            cfg.general.timeout_seconds,
+            slog,
+            song.song_id,
+            audio_info.duration_seconds,
+            1.0,
+            progress_callback,
+        )
+    except Exception as e:
+        _safe_unlink(temp_output_path)
+        return TranscodeResult(
+            success=False,
+            output_path=None,
+            original_backed_up=False,
+            backup_path=None,
+            duration_seconds=time.time() - start_time,
+            error_message=str(e),
+            aborted=False,
+        )
+
+    if aborted:
+        _safe_unlink(temp_output_path)
+        return TranscodeResult(
+            success=False,
+            output_path=None,
+            original_backed_up=False,
+            backup_path=None,
+            duration_seconds=time.time() - start_time,
+            error_message="Transcode aborted by user",
+            aborted=True,
+        )
+
+    if not success:
+        _safe_unlink(temp_output_path)
+        return TranscodeResult(
+            success=False,
+            output_path=None,
+            original_backed_up=False,
+            backup_path=None,
+            duration_seconds=time.time() - start_time,
+            error_message="FFMPEG encoding failed",
+            aborted=False,
+        )
+
+    # Verify output if configured
+    if cfg.general.verify_output:
+        out_info = analyze_audio(temp_output_path)
+        if not out_info or out_info.duration_seconds <= 0:
+            _safe_unlink(temp_output_path)
+            return TranscodeResult(
+                success=False,
+                output_path=None,
+                original_backed_up=False,
+                backup_path=None,
+                duration_seconds=time.time() - start_time,
+                error_message="Transcoded audio output verification failed",
+            )
+
+    # Determine final output location
+    final_path = media_path.with_suffix(new_ext)
+
+    # Backup original if configured
+    backup_path = None
+    if cfg.general.backup_original:
+        backup_path = media_path.with_name(f"{media_path.stem}{cfg.general.backup_suffix}{media_path.suffix}")
+        try:
+            shutil.move(str(media_path), str(backup_path))
+        except OSError as e:
+            slog.warning(f"Could not backup original audio: {e}")
+            backup_path = None
+
+    # Put final output in place
+    Path(str(temp_output_path)).replace(str(final_path))
+
+    # If we didn't back up and output differs, remove old source file
+    if backup_path is None and final_path != media_path and media_path.exists():
+        try:
+            media_path.unlink()
+        except OSError as e:
+            slog.warning(f"Could not remove original after audio transcode: {e}")
+
+    # Update SyncMeta (audio)
+    sync_ok = update_sync_meta_audio(
+        song=song,
+        original_audio_path=backup_path or media_path,
+        transcoded_audio_path=final_path,
+        codec=audio_codec,
+        slog=slog,
+        backup_source=False,  # Already handled backup above
+        backup_suffix=cfg.general.backup_suffix,
+    )
+    if not sync_ok:
+        slog.warning("SyncMeta audio update failed; this may cause re-download loops.")
+
+    duration = time.time() - start_time
+    speed = audio_info.duration_seconds / duration if duration > 0 else 0
+    slog.info(f"Audio transcode completed in {duration:.1f}s ({speed:.1f}x realtime): {final_path.name}")
+
+    return TranscodeResult(
+        success=True,
+        output_path=final_path,
+        original_backed_up=backup_path is not None,
+        backup_path=backup_path,
+        duration_seconds=duration,
+        error_message=None,
+        aborted=False,
+    )
+
+
 def process_video(
     song: UsdbSong,
     video_path: Path,
@@ -72,9 +311,9 @@ def process_video(
     # Compute effective limits (optionally from USDB Syncer settings)
     cfg = _apply_limits(cfg, video_info)
 
-    # Check if transcoding needed (unless force_transcode is enabled)
+    # Check if transcoding needed (unless force_transcode_video is enabled)
     slog.debug(f"Checking if transcoding is needed for target codec: {cfg.target_codec}")
-    if not cfg.general.force_transcode and not needs_transcoding(video_info, cfg):
+    if not cfg.general.force_transcode_video and not needs_transcoding(video_info, cfg):
         slog.info(f"Video already in {cfg.target_codec} format - skipping transcode")
         return TranscodeResult(
             success=True,
@@ -85,9 +324,9 @@ def process_video(
             error_message=None
         )
 
-    if cfg.general.force_transcode and not needs_transcoding(video_info, cfg):
+    if cfg.general.force_transcode_video and not needs_transcoding(video_info, cfg):
         slog.info(
-            f"Video already in {cfg.target_codec} format, but force_transcode is enabled - proceeding"
+            f"Video already in {cfg.target_codec} format, but force_transcode_video is enabled - proceeding"
         )
 
     # Check disk space

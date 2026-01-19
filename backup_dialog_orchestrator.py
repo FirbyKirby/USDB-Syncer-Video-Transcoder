@@ -136,7 +136,7 @@ class BackupDialogOrchestrator:
             QtWidgets.QMessageBox.information(
                 self.parent,
                 "No Backups Found",
-                "No persistent video backups were found in your song library."
+                "No persistent media backups (video/audio) were found in your song library."
             )
             return
 
@@ -169,7 +169,7 @@ class BackupDialogOrchestrator:
             f"You are about to PERMANENTLY DELETE {len(selected)} backup files.\n\n"
             f"This will free {total_size:.1f} MB of disk space.\n\n"
             "⚠ THIS ACTION CANNOT BE UNDONE! ⚠\n\n"
-            "Deleted backups cannot be recovered. Your transcoded videos will remain intact, "
+            "Deleted backups cannot be recovered. Your transcoded media files will remain intact, "
             "but you will lose the ability to restore from these backups.\n\n"
             "Are you absolutely sure you want to continue?"
         )
@@ -212,9 +212,9 @@ class BackupDialogOrchestrator:
         """Phase 3: Confirm restoration."""
         message = (
             f"You are about to RESTORE {len(selected)} backup files.\n\n"
-            "⚠ THIS WILL OVERWRITE YOUR ACTIVE TRANSCODED VIDEOS! ⚠\n\n"
-            "The current active videos will be replaced by their original backup versions. "
-            "A safety backup of the current videos will be created before replacement.\n\n"
+            "⚠ THIS WILL OVERWRITE YOUR ACTIVE TRANSCODED MEDIA FILES! ⚠\n\n"
+            "The current active media files will be replaced by their original backup versions. "
+            "A safety backup of the current media files will be created before replacement.\n\n"
             "Are you sure you want to continue?"
         )
         

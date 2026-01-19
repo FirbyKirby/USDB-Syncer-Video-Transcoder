@@ -21,9 +21,10 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class RollbackEntry:
-    """Single video rollback entry."""
+    """Single media rollback entry."""
     song_id: SongId
-    original_path: Path  # Original video path in user directory
+    media_type: str  # "video" or "audio"
+    original_path: Path  # Original media path in user directory
     rollback_backup_path: Path  # Backup in temp directory
     new_output_path: Path  # Path to transcoded file
     transcoded_at: float
@@ -32,6 +33,7 @@ class RollbackEntry:
     def to_dict(self) -> dict:
         return {
             "song_id": int(self.song_id),
+            "media_type": self.media_type,
             "original_path": str(self.original_path),
             "rollback_backup_path": str(self.rollback_backup_path),
             "new_output_path": str(self.new_output_path),
@@ -43,6 +45,7 @@ class RollbackEntry:
     def from_dict(cls, data: dict) -> RollbackEntry:
         return cls(
             song_id=SongId(data["song_id"]),
+            media_type=data.get("media_type", "video"),
             original_path=Path(data["original_path"]),
             rollback_backup_path=Path(data["rollback_backup_path"]),
             new_output_path=Path(data["new_output_path"]),
@@ -82,8 +85,8 @@ class RollbackManager:
         
         return self._rollback_dir
 
-    def get_rollback_backup_path(self, song_id: SongId, original_path: Path) -> Path:
-        """Generate rollback backup path for a video.
+    def get_rollback_backup_path(self, song_id: SongId, original_path: Path, *, media_type: str = "video") -> Path:
+        """Generate rollback backup path for a media file.
         
         Args:
             song_id: Song ID
@@ -95,12 +98,14 @@ class RollbackManager:
         if not self._rollback_dir:
             raise RuntimeError("Rollback not enabled")
         
-        filename = f"video_{song_id}_{original_path.stem}{original_path.suffix}"
+        prefix = "audio" if media_type == "audio" else "video"
+        filename = f"{prefix}_{song_id}_{original_path.stem}{original_path.suffix}"
         return self._rollback_dir / filename
 
     def record_transcode(
         self,
         song_id: SongId,
+        media_type: str,
         original_path: Path,
         rollback_backup_path: Path,
         new_output_path: Path,
@@ -117,6 +122,7 @@ class RollbackManager:
         """
         entry = RollbackEntry(
             song_id=song_id,
+            media_type=media_type,
             original_path=original_path,
             rollback_backup_path=rollback_backup_path,
             new_output_path=new_output_path,
@@ -125,6 +131,24 @@ class RollbackManager:
         )
         self.entries.append(entry)
         self._save_manifest()
+
+    # Backward-compatible wrapper for older callers.
+    def record_video_transcode(
+        self,
+        song_id: SongId,
+        original_path: Path,
+        rollback_backup_path: Path,
+        new_output_path: Path,
+        user_backup_existed: bool,
+    ) -> None:
+        self.record_transcode(
+            song_id=song_id,
+            media_type="video",
+            original_path=original_path,
+            rollback_backup_path=rollback_backup_path,
+            new_output_path=new_output_path,
+            user_backup_existed=user_backup_existed,
+        )
 
     def rollback_all(self) -> tuple[int, int, list[SongId]]:
         """Rollback all transcodes using temp backups.
@@ -139,7 +163,7 @@ class RollbackManager:
         # Rollback in reverse order
         for entry in reversed(self.entries):
             try:
-                _logger.info(f"Rolling back transcode for song {entry.song_id}")
+                _logger.info(f"Rolling back {entry.media_type} transcode for song {entry.song_id}")
                 
                 # 1. Restore original from rollback temp backup
                 if not entry.rollback_backup_path.exists():
@@ -205,6 +229,14 @@ class RollbackManager:
         sync_meta = self._get_sync_meta(entry.song_id)
         if not sync_meta:
             _logger.warning(f"No active SyncMeta found for song {entry.song_id} during rollback")
+            return
+
+        if entry.media_type == "audio":
+            if getattr(sync_meta, "audio", None) and sync_meta.audio and sync_meta.audio.file:
+                sync_meta.audio.file = ResourceFile.new(entry.original_path, sync_meta.audio.file.resource)
+                sync_meta.synchronize_to_file()
+                sync_meta.upsert()
+                _logger.info(f"Updated SyncMeta for song {entry.song_id} to original audio")
             return
 
         if sync_meta.video and sync_meta.video.file:

@@ -2,6 +2,22 @@
   "version": 2,
   "auto_transcode_enabled": true,
   "target_codec": "h264",
+  "audio": {
+    "audio_transcode_enabled": true,
+    "force_transcode_audio": false,
+
+    "audio_codec": "aac",
+    "mp3_quality": 0,
+    "vorbis_quality": 10.0,
+    "aac_vbr_mode": 5,
+    "opus_bitrate_kbps": 160,
+
+    "audio_normalization_enabled": false,
+    "audio_normalization_method": "loudnorm",
+    "audio_normalization_target": -18.0,
+    "audio_normalization_true_peak": -2.0,
+    "audio_normalization_lra": 11.0
+  },
   "h264": {
     "profile": "high",
     "pixel_format": "yuv420p",
@@ -40,7 +56,7 @@
     "timeout_seconds": 600,
     "verify_output": true,
     "min_free_space_mb": 500,
-    "force_transcode": false,
+    "force_transcode_video": false,
     "max_resolution": null,
     "max_fps": null,
     "max_bitrate_kbps": null

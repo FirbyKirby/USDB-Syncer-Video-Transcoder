@@ -23,7 +23,7 @@ class BackupRestoreProgressDialog(QtWidgets.QDialog):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        self.setWindowTitle("Restoring Video Backups")
+        self.setWindowTitle("Restoring Media Backups")
         # Using CHECK_FOR_UPDATE as a substitute for restore
         self.setWindowIcon(icons.Icon.CHECK_FOR_UPDATE.icon())
         self.setFixedSize(400, 250)
@@ -61,7 +61,8 @@ class BackupRestoreProgressDialog(QtWidgets.QDialog):
 
     def update_progress(self, current: int, total: int, backup: BackupInfo) -> None:
         """Update the progress display."""
-        self.lbl_status.setText(f"Restoring backup {current + 1} of {total}...")
+        media_label = getattr(backup, "media_type", "media")
+        self.lbl_status.setText(f"Restoring {media_label} backup {current + 1} of {total}...")
         self.progress_bar.setValue(current + 1)
         self.lbl_current_song.setText(f"{backup.artist} - {backup.song_title}")
         self.lbl_current_file.setText(f"{backup.backup_path.name} ({backup.size_mb:.1f} MB)")

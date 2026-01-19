@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from usdb_syncer.utils import LinuxEnvCleaner
@@ -51,6 +52,37 @@ def check_encoder_available(encoder: str) -> bool:
         return result.returncode == 0
     except Exception:
         return False
+
+
+def is_audio_file(path: str | Path) -> bool:
+    """Return True if the file extension looks like a standalone audio format."""
+
+    p = path if isinstance(path, Path) else Path(path)
+    return p.suffix.lower() in (
+        ".mp3",
+        ".m4a",
+        ".aac",
+        ".ogg",
+        ".opus",
+        ".wav",
+        ".flac",
+        ".alac",
+    )
+
+
+def is_video_file(path: str | Path) -> bool:
+    """Return True if the file extension looks like a video container."""
+
+    p = path if isinstance(path, Path) else Path(path)
+    return p.suffix.lower() in (
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".webm",
+        ".avi",
+        ".wmv",
+        ".m4v",
+    )
 
 
 def time_to_seconds(time_str: str) -> float:

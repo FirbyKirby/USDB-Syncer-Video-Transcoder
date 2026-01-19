@@ -1,6 +1,6 @@
 # Release Process
 
-This document describes the release process for the `video_transcoder` addon.
+This document describes the release process for the `transcoder` addon.
 
 ## Tag Nomenclature
 
@@ -29,18 +29,18 @@ Once a tag matching `v*` is pushed, a GitHub Actions workflow (`release.yml`) is
 
 The workflow performs the following steps:
 1. **Checkout**: Downloads the repository content.
-2. **Package**: Creates a zip file named `video_transcoder.zip`.
-   - The zip file contains a root directory named `video_transcoder/`.
+2. **Package**: Creates a zip file named `transcoder.zip`.
+   - The zip file contains a root directory named `transcoder/`.
    - All addon files (Python files, `docs/`, `LICENSE`, `README.md`) are placed inside this directory.
    - Developer-only files (like `docs/RELEASE.md`), configuration files (`config.json`), and git-related files are excluded.
 3. **Release**: Creates a new GitHub Release.
    - The release is named after the tag (e.g., `v1.0.0`).
-   - The `video_transcoder.zip` file is uploaded as a release asset.
+   - The `transcoder.zip` file is uploaded as a release asset.
    - **Note**: The release is initially created as a **Draft**. You must manually review and publish it on GitHub.
 
 ## Expected Output
 
-The primary output of the release process is a `video_transcoder.zip` file attached to the GitHub Release. This zip file is ready for distribution to users of USDB_Syncer.
+The primary output of the release process is a `transcoder.zip` file attached to the GitHub Release. This zip file is ready for distribution to users of USDB_Syncer.
 
 ### Important Note on GitHub Assets
 
@@ -50,4 +50,4 @@ GitHub automatically generates two files for every release:
 
 **These files should be ignored.** They are not compatible with USDB_Syncer because they contain the entire repository structure (including developer files) and are named based on the repository name rather than the addon name.
 
-Always use the **`video_transcoder.zip`** asset created by the workflow, as it has the specific directory structure required for the addon to be loaded correctly by USDB_Syncer.
+Always use the **`transcoder.zip`** asset created by the workflow, as it has the specific directory structure required for the addon to be loaded correctly by USDB_Syncer.

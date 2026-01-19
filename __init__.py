@@ -1,4 +1,4 @@
-"""Video Transcoder Addon - Converts videos for various formats and compatibility."""
+"""Transcoder Addon - Converts media for various formats and compatibility."""
 
 from __future__ import annotations
 
@@ -33,7 +33,11 @@ _backup_mgmt_action = None
 
 
 def on_download_finished(song: UsdbSong) -> None:
-    """Process video after song download completes."""
+    """Process media after song download completes.
+
+    Stage 2 adds audio support. Video processing remains the default behavior
+    and audio processing is attempted when SyncMeta includes an audio file.
+    """
     slog = song_logger(song.song_id)
 
     try:
@@ -59,8 +63,20 @@ def on_download_finished(song: UsdbSong) -> None:
             slog.debug("No video file found - skipping transcode")
             return
 
-        # Analyze and potentially transcode
+        # Analyze and potentially transcode video
         transcoder.process_video(song, video_path, cfg, slog)
+
+        # Analyze and potentially transcode standalone audio (if present)
+        audio_path = (
+            song.sync_meta.path.parent / song.sync_meta.audio.file.fname
+            if getattr(song.sync_meta, "audio", None)
+            and song.sync_meta.audio
+            and song.sync_meta.audio.file
+            and song.sync_meta.audio.file.fname
+            else None
+        )
+        if cfg.audio.audio_transcode_enabled and audio_path and audio_path.exists():
+            transcoder.process_audio(song, audio_path, cfg, slog)
 
     except Exception as e:
         slog.error(f"Video transcode failed: {type(e).__name__}: {e}")
@@ -115,17 +131,17 @@ def _register_gui_hooks() -> None:
             orchestrator.start_workflow()
 
         # Ui_MainWindow provides menu_tools
-        _settings_action = main_window.menu_tools.addAction("Video Transcoder Settings", open_settings)
+        _settings_action = main_window.menu_tools.addAction("Transcoder Settings", open_settings)
         _settings_action.setIcon(icons.Icon.VIDEO.icon())
         _settings_action.setToolTip("Configure video transcoding settings and hardware acceleration.")
         
-        _batch_action = main_window.menu_tools.addAction("Batch Video Transcode", start_batch_transcode)
+        _batch_action = main_window.menu_tools.addAction("Batch Media Transcode", start_batch_transcode)
         _batch_action.setIcon(icons.Icon.FFMPEG.icon())
-        _batch_action.setToolTip("Transcode multiple synchronized videos in one pass.")
+        _batch_action.setToolTip("Transcode multiple synchronized media files (video/audio) in one pass.")
 
-        _backup_mgmt_action = main_window.menu_tools.addAction("Manage Video Backups", manage_backups)
+        _backup_mgmt_action = main_window.menu_tools.addAction("Manage Media Backups", manage_backups)
         _backup_mgmt_action.setIcon(icons.Icon.CHANGES.icon())
-        _backup_mgmt_action.setToolTip("Find, remove, or restore persistent video backup files.")
+        _backup_mgmt_action.setToolTip("Find, remove, or restore persistent media backup files (video/audio).")
 
         # Subscribe to theme changes
         events.ThemeChanged.subscribe(on_theme_changed)
@@ -134,4 +150,4 @@ def _register_gui_hooks() -> None:
 
 
 _register_gui_hooks()
-_logger.info("Video Transcoder addon loaded")
+_logger.info("Transcoder addon loaded")

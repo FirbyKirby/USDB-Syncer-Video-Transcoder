@@ -37,7 +37,7 @@ class BatchProgressDialog(QDialog):
 
     def _setup_ui(self) -> None:
         """Build UI with progress bars and statistics."""
-        self.setWindowTitle("Batch Video Transcode In Progress")
+        self.setWindowTitle("Batch Media Transcode In Progress")
         self.setWindowIcon(icons.Icon.FFMPEG.icon())
         self.setMinimumWidth(500)
         self.setModal(True)
@@ -48,7 +48,7 @@ class BatchProgressDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # 1. Overall Progress
-        self.lbl_overall = QLabel(f"Overall Progress: Transcoding 0 of {self.total_videos} videos")
+        self.lbl_overall = QLabel(f"Overall Progress: Transcoding 0 of {self.total_videos} media files")
         layout.addWidget(self.lbl_overall)
         
         self.pb_overall = QProgressBar()
@@ -58,7 +58,7 @@ class BatchProgressDialog(QDialog):
 
         layout.addSpacing(20)
 
-        # 2. Current Video Info
+        # 2. Current Media Info
         self.lbl_current_title = QLabel("Currently transcoding:")
         self.lbl_current_title.setStyleSheet("font-weight: bold;")
         layout.addWidget(self.lbl_current_title)
@@ -69,8 +69,8 @@ class BatchProgressDialog(QDialog):
 
         layout.addSpacing(10)
 
-        # 3. Video Progress
-        layout.addWidget(QLabel("Video Progress:"))
+        # 3. Media Progress
+        layout.addWidget(QLabel("Progress:"))
         self.pb_video = QProgressBar()
         self.pb_video.setRange(0, 100)
         self.pb_video.setValue(0)
@@ -129,12 +129,12 @@ class BatchProgressDialog(QDialog):
         layout.addWidget(self.btn_abort)
 
     def update_overall_progress(self, completed: int) -> None:
-        """Update overall progress (X of Y videos)."""
+        """Update overall progress (X of Y media files)."""
         self.current_video_idx = completed
         if completed < self.total_videos:
-            self.lbl_overall.setText(f"Overall Progress: Transcoding {completed + 1} of {self.total_videos} videos")
+            self.lbl_overall.setText(f"Overall Progress: Transcoding {completed + 1} of {self.total_videos} media files")
         else:
-            self.lbl_overall.setText(f"Overall Progress: Completed {self.total_videos} of {self.total_videos} videos")
+            self.lbl_overall.setText(f"Overall Progress: Completed {self.total_videos} of {self.total_videos} media files")
         self.pb_overall.setValue(completed)
         
         # Update overall elapsed time

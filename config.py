@@ -1,4 +1,4 @@
-"""Configuration management for the Video Transcoder addon."""
+"""Configuration management for the Transcoder addon."""
 
 from __future__ import annotations
 
@@ -12,8 +12,10 @@ from typing import Literal, Optional
 _logger = logging.getLogger(__name__)
 
 TargetCodec = Literal["h264", "vp8", "hevc", "vp9", "av1"]
+AudioCodec = Literal["mp3", "vorbis", "aac", "opus"]
 H264Profile = Literal["baseline", "main", "high"]
 HEVCProfile = Literal["main", "main10"]
+AudioNormalizationMethod = Literal["loudnorm", "replaygain"]
 
 
 @dataclass
@@ -62,6 +64,46 @@ class AV1Config:
 
 
 @dataclass
+class AudioConfig:
+    """Configuration for standalone audio transcoding.
+
+    Audio quality controls are codec-specific (see docs/TRANSCODER_EXPANSION_ARCHITECTURE.md).
+
+    - MP3: LAME VBR quality (0-9, lower = better)
+    - Vorbis: quality scale (-1.0 to 10.0)
+    - AAC: VBR mode (1-5)
+    - Opus: bitrate in kbps (6-510)
+
+    Normalization fields are hooks for Stage 3; Stage 2 prepares config plumbing.
+    """
+
+    # Enable/disable automatic audio processing after download.
+    # Kept in the audio section so video and audio can be toggled independently.
+    audio_transcode_enabled: bool = True
+
+    # Force re-transcode audio even when input codec/container already matches.
+    # This is intentionally separate from the video force flag for independent control.
+    force_transcode_audio: bool = False
+
+    audio_codec: AudioCodec = "aac"
+
+    # Codec-specific quality settings
+    mp3_quality: int = 0
+    vorbis_quality: float = 10.0
+    aac_vbr_mode: int = 5
+    opus_bitrate_kbps: int = 160
+
+    # Normalization (Stage 3 implementation; Stage 2 uses these as decision hooks)
+    audio_normalization_enabled: bool = False
+    audio_normalization_target: float = -18.0
+    # EBU R128 loudnorm targets (used when audio_normalization_method == "loudnorm")
+    # Defaults are conservative and align with typical karaoke/music playback normalization.
+    audio_normalization_true_peak: float = -2.0
+    audio_normalization_lra: float = 11.0
+    audio_normalization_method: AudioNormalizationMethod = "loudnorm"
+
+
+@dataclass
 class GeneralConfig:
     """General transcoding settings."""
     hardware_encoding: bool = True
@@ -77,7 +119,7 @@ class GeneralConfig:
     timeout_seconds: int = 600
     verify_output: bool = True
     min_free_space_mb: int = 500
-    force_transcode: bool = False
+    force_transcode_video: bool = False
 
 
 @dataclass
@@ -91,6 +133,8 @@ class UsdbIntegrationConfig:
 @dataclass
 class TranscoderConfig:
     """Root configuration object."""
+    # NOTE: This addon is still pre-release; keep the schema version stable.
+    # New fields are added with safe defaults and unknown fields are ignored.
     version: int = 2
     auto_transcode_enabled: bool = True
     target_codec: TargetCodec = "h264"
@@ -99,6 +143,7 @@ class TranscoderConfig:
     hevc: HEVCConfig = field(default_factory=HEVCConfig)
     vp9: VP9Config = field(default_factory=VP9Config)
     av1: AV1Config = field(default_factory=AV1Config)
+    audio: AudioConfig = field(default_factory=AudioConfig)
     general: GeneralConfig = field(default_factory=GeneralConfig)
     usdb_integration: UsdbIntegrationConfig = field(default_factory=UsdbIntegrationConfig)
 
@@ -106,7 +151,7 @@ class TranscoderConfig:
 def get_config_path() -> Path:
     """Return path to config file in USDB Syncer data directory."""
     from usdb_syncer.utils import AppPaths
-    return AppPaths.db.parent / "video_transcoder_config.json"
+    return AppPaths.db.parent / "transcoder_config.json"
 
 
 def load_config() -> TranscoderConfig:
@@ -144,10 +189,7 @@ def _migrate_config(data: dict) -> dict:
 
     _logger.info(f"Migrating config from version {version} to 2")
 
-    # Version 1 -> 2: Remove per-codec hardware fields and move to global if any were disabled
-    # If any per-codec hardware was disabled, we might want to disable global hardware encoding
-    # to be safe, but the design says "Remove per-codec hardware fields".
-    # Let's check if any were explicitly False.
+    # Remove per-codec hardware fields and move to global if any were disabled.
     hw_enabled = data.get("general", {}).get("hardware_encoding", True)
 
     codecs_to_check = [
@@ -196,6 +238,7 @@ def _parse_config(data: dict) -> TranscoderConfig:
         hevc=HEVCConfig(**get_clean_dict(HEVCConfig, data.get("hevc", {}))),
         vp9=VP9Config(**get_clean_dict(VP9Config, data.get("vp9", {}))),
         av1=AV1Config(**get_clean_dict(AV1Config, data.get("av1", {}))),
+        audio=AudioConfig(**get_clean_dict(AudioConfig, data.get("audio", {}))),
         general=GeneralConfig(**get_clean_dict(GeneralConfig, general_data)),
         usdb_integration=UsdbIntegrationConfig(**get_clean_dict(UsdbIntegrationConfig, data.get("usdb_integration", {}))),
     )

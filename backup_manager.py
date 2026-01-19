@@ -20,8 +20,9 @@ class BackupInfo:
     song_id: SongId
     song_title: str
     artist: str
+    media_type: Literal["video", "audio"]
     backup_path: Path
-    active_video_path: Path  # The current transcoded video
+    active_media_path: Path  # The current transcoded/active media file
     size_mb: float
     backup_date: Optional[float]  # mtime timestamp
     
@@ -30,6 +31,11 @@ class BackupInfo:
     deletion_status: Literal["pending", "deleting", "deleted", "failed", "skipped"] = "pending"
     restore_status: Literal["pending", "restoring", "restored", "failed", "skipped"] = "pending"
     error_message: Optional[str] = None
+
+    @property
+    def active_video_path(self) -> Path:
+        """Backward-compatible alias (legacy callers treat all backups as video)."""
+        return self.active_media_path
 
 
 @dataclass
@@ -55,7 +61,7 @@ def discover_backups(
     cfg: TranscoderConfig,
     cancel_check: Optional[Callable[[], bool]] = None
 ) -> list[BackupInfo]:
-    """Discover all persistent backup files in the song library."""
+    """Discover all persistent backup files (video and audio) in the song library."""
     backups: list[BackupInfo] = []
     song_dir = settings.get_song_dir()
     suffix = cfg.general.backup_suffix
@@ -65,31 +71,79 @@ def discover_backups(
             _logger.info("Backup discovery cancelled by user")
             break
             
-        video_path = sync_meta.path.parent / sync_meta.video.file.fname if sync_meta.video and sync_meta.video.file and sync_meta.video.file.fname else None
-        if not video_path or not video_path.exists():
-            continue
-        
-        # Check custom_data first (most reliable)
-        source_fname = sync_meta.custom_data.get("transcoder_source_fname")
-        if source_fname:
-            backup_path = sync_meta.path.parent / source_fname
-            if backup_path.exists() and validate_backup(backup_path, video_path):
-                backups.append(_create_backup_info(sync_meta, backup_path, video_path))
-                continue
-        
-        # Fallback: glob pattern search
-        video_stem = video_path.stem
-        pattern = f"{video_stem}{suffix}*"
-        for candidate in sync_meta.path.parent.glob(pattern):
-            if candidate != video_path and validate_backup(candidate, video_path):
-                # Avoid duplicates if custom_data already found it
-                if not any(b.backup_path == candidate for b in backups):
-                    backups.append(_create_backup_info(sync_meta, candidate, video_path))
+        # Video
+        video_path = (
+            sync_meta.path.parent / sync_meta.video.file.fname
+            if sync_meta.video and sync_meta.video.file and sync_meta.video.file.fname
+            else None
+        )
+        if video_path and video_path.exists():
+            _discover_for_media(
+                backups=backups,
+                sync_meta=sync_meta,
+                media_type="video",
+                active_media_path=video_path,
+                backup_suffix=suffix,
+            )
+
+        # Audio
+        audio_path = (
+            sync_meta.path.parent / sync_meta.audio.file.fname
+            if getattr(sync_meta, "audio", None)
+            and sync_meta.audio
+            and sync_meta.audio.file
+            and sync_meta.audio.file.fname
+            else None
+        )
+        if audio_path and audio_path.exists():
+            _discover_for_media(
+                backups=backups,
+                sync_meta=sync_meta,
+                media_type="audio",
+                active_media_path=audio_path,
+                backup_suffix=suffix,
+            )
     
     return backups
 
 
-def _create_backup_info(sync_meta: SyncMeta, backup_path: Path, video_path: Path) -> BackupInfo:
+def _discover_for_media(
+    *,
+    backups: list[BackupInfo],
+    sync_meta: SyncMeta,
+    media_type: Literal["video", "audio"],
+    active_media_path: Path,
+    backup_suffix: str,
+) -> None:
+    """Populate `backups` with discovered backups for a single media file."""
+    # Check custom_data first (most reliable)
+    if media_type == "video":
+        source_key = "transcoder_source_fname"
+    else:
+        source_key = "transcoder_audio_source_fname"
+
+    source_fname = sync_meta.custom_data.get(source_key)
+    if source_fname:
+        backup_path = sync_meta.path.parent / source_fname
+        if backup_path.exists() and validate_backup(backup_path, active_media_path, media_type=media_type):
+            backups.append(_create_backup_info(sync_meta, media_type, backup_path, active_media_path))
+            return
+
+    # Fallback: glob pattern search (stem + suffix + any extension)
+    pattern = f"{active_media_path.stem}{backup_suffix}*"
+    for candidate in sync_meta.path.parent.glob(pattern):
+        if candidate != active_media_path and validate_backup(candidate, active_media_path, media_type=media_type):
+            # Avoid duplicates
+            if not any(b.backup_path == candidate for b in backups):
+                backups.append(_create_backup_info(sync_meta, media_type, candidate, active_media_path))
+
+
+def _create_backup_info(
+    sync_meta: SyncMeta,
+    media_type: Literal["video", "audio"],
+    backup_path: Path,
+    active_media_path: Path,
+) -> BackupInfo:
     """Create a BackupInfo object from a SyncMeta and backup path."""
     from usdb_syncer.usdb_song import UsdbSong
     song = UsdbSong.get(sync_meta.song_id)
@@ -98,21 +152,27 @@ def _create_backup_info(sync_meta: SyncMeta, backup_path: Path, video_path: Path
         song_id=sync_meta.song_id,
         song_title=song.title if song else (sync_meta.custom_data.get("title") or "Unknown Title"),
         artist=song.artist if song else (sync_meta.custom_data.get("artist") or "Unknown Artist"),
+        media_type=media_type,
         backup_path=backup_path,
-        active_video_path=video_path,
+        active_media_path=active_media_path,
         size_mb=stat.st_size / (1024 * 1024),
         backup_date=stat.st_mtime,
     )
 
 
-def validate_backup(backup_path: Path, active_video_path: Path) -> bool:
-    """Validate that a file is actually a backup (not the active video)."""
-    if backup_path == active_video_path:
+def validate_backup(
+    backup_path: Path,
+    active_media_path: Path,
+    *,
+    media_type: Literal["video", "audio"] = "video",
+) -> bool:
+    """Validate that a file is actually a backup (not the active media file)."""
+    if backup_path == active_media_path:
         return False
     if not backup_path.exists() or not backup_path.is_file():
         return False
-    if not active_video_path.exists():
-        _logger.warning(f"Active video missing for backup: {backup_path}")
+    if not active_media_path.exists():
+        _logger.warning(f"Active {media_type} missing for backup: {backup_path}")
         return False
     return True
 
@@ -126,7 +186,11 @@ def delete_backup(
     
     try:
         # Double-check validation
-        if not validate_backup(backup_info.backup_path, backup_info.active_video_path):
+        if not validate_backup(
+            backup_info.backup_path,
+            backup_info.active_media_path,
+            media_type=backup_info.media_type,
+        ):
             backup_info.error_message = "Validation failed"
             slog.error(f"Backup validation failed: {backup_info.backup_path}")
             return False
@@ -140,7 +204,7 @@ def delete_backup(
         
         # Delete the file
         backup_info.backup_path.unlink()
-        slog.info(f"Deleted backup: {backup_info.backup_path.name}")
+        slog.info(f"Deleted {backup_info.media_type} backup: {backup_info.backup_path.name}")
         
         # Update SyncMeta if requested
         if update_sync_meta:
@@ -150,12 +214,17 @@ def delete_backup(
                     sync_meta = meta
                     break
             if sync_meta:
-                source_fname = sync_meta.custom_data.get("transcoder_source_fname")
+                if backup_info.media_type == "video":
+                    source_key = "transcoder_source_fname"
+                else:
+                    source_key = "transcoder_audio_source_fname"
+
+                source_fname = sync_meta.custom_data.get(source_key)
                 if source_fname == backup_info.backup_path.name:
-                    sync_meta.custom_data.set("transcoder_source_fname", None)
+                    sync_meta.custom_data.set(source_key, None)
                     sync_meta.synchronize_to_file()
                     sync_meta.upsert()
-                    slog.debug("Cleared transcoder_source_fname from sync_meta")
+                    slog.debug(f"Cleared {source_key} from sync_meta")
         
         return True
         
@@ -219,7 +288,7 @@ def delete_backups_batch(
 def restore_backup(
     backup_info: BackupInfo,
 ) -> bool:
-    """Restore a backup file by replacing the active video."""
+    """Restore a backup file by replacing the active media file (video or audio)."""
     import shutil
     import time
     import tempfile
@@ -229,7 +298,11 @@ def restore_backup(
     temp_path: Optional[Path] = None
     try:
         # 1. Validation and permission checks
-        if not validate_backup(backup_info.backup_path, backup_info.active_video_path):
+        if not validate_backup(
+            backup_info.backup_path,
+            backup_info.active_media_path,
+            media_type=backup_info.media_type,
+        ):
             backup_info.error_message = "Validation failed"
             slog.error(f"Backup validation failed: {backup_info.backup_path}")
             return False
@@ -239,7 +312,7 @@ def restore_backup(
             slog.error(f"No read permission for backup: {backup_info.backup_path}")
             return False
 
-        dest_dir = backup_info.active_video_path.parent
+        dest_dir = backup_info.active_media_path.parent
         if not os.access(dest_dir, os.W_OK):
             backup_info.error_message = "No write permission on destination"
             slog.error(f"No write permission for directory: {dest_dir}")
@@ -249,24 +322,24 @@ def restore_backup(
         # The backup file preserves the original extension.
         # We restore to the original filename by using the active video's base name
         # but with the backup's original extension.
-        original_video_path = backup_info.active_video_path.with_suffix(backup_info.backup_path.suffix)
-        transcoded_video_path = backup_info.active_video_path
+        original_media_path = backup_info.active_media_path.with_suffix(backup_info.backup_path.suffix)
+        active_media_path = backup_info.active_media_path
         
         # 3. Create safety backup of current active video if it exists
         safety_path: Optional[Path] = None
-        if transcoded_video_path.exists():
+        if active_media_path.exists():
             timestamp = int(time.time())
-            safety_path = transcoded_video_path.with_suffix(
-                f".safety-{timestamp}{transcoded_video_path.suffix}"
+            safety_path = active_media_path.with_suffix(
+                f".safety-{timestamp}{active_media_path.suffix}"
             )
-            shutil.copy2(transcoded_video_path, safety_path)
-            slog.info(f"Created safety backup: {safety_path.name}")
+            shutil.copy2(active_media_path, safety_path)
+            slog.info(f"Created safety backup ({backup_info.media_type}): {safety_path.name}")
 
         # 4. Atomic replacement pattern
         # Copy backup to a temporary file in the same directory
         with tempfile.NamedTemporaryFile(
             dir=dest_dir,
-            suffix=original_video_path.suffix,
+            suffix=original_media_path.suffix,
             delete=False
         ) as tmp:
             temp_path = Path(tmp.name)
@@ -274,14 +347,14 @@ def restore_backup(
         shutil.copy2(backup_info.backup_path, temp_path)
         
         # Atomic replacement to the ORIGINAL filename
-        os.replace(temp_path, original_video_path)
+        os.replace(temp_path, original_media_path)
         temp_path = None # Successfully replaced
-        slog.info(f"Restored backup to: {original_video_path.name}")
+        slog.info(f"Restored {backup_info.media_type} backup to: {original_media_path.name}")
 
         # 5. Cleanup transcoded video if it had a different name/extension
-        if transcoded_video_path != original_video_path and transcoded_video_path.exists():
-            transcoded_video_path.unlink()
-            slog.info(f"Deleted transcoded video: {transcoded_video_path.name}")
+        if active_media_path != original_media_path and active_media_path.exists():
+            active_media_path.unlink()
+            slog.info(f"Deleted active {backup_info.media_type}: {active_media_path.name}")
 
         # 6. Update SyncMeta
         sync_meta = None
@@ -291,34 +364,58 @@ def restore_backup(
                 break
         
         if sync_meta:
-            if sync_meta.video and sync_meta.video.file:
-                # Update mtime and filename to match the restored file
-                sync_meta.video.file.mtime = get_mtime(original_video_path)
-                sync_meta.video.file.fname = original_video_path.name
-                
-                # Clear transcoding metadata
-                sync_meta.custom_data.set("transcoder_codec", None)
-                sync_meta.custom_data.set("transcoder_profile", None)
-                sync_meta.custom_data.set("transcoder_timestamp", None)
-                sync_meta.custom_data.set("transcoder_output_fname", None)
-                
-                # Update or clear transcoder_source_fname
-                # Since we restored from backup, the backup is no longer "the source"
-                # in the context of a pending transcode, it IS the active video.
-                sync_meta.custom_data.set("transcoder_source_fname", None)
-                
-                sync_meta.synchronize_to_file()
-                sync_meta.upsert()
-                slog.debug("Updated sync_meta after restoration")
+            if backup_info.media_type == "video":
+                if sync_meta.video and sync_meta.video.file:
+                    # Update mtime and filename to match the restored file
+                    sync_meta.video.file.mtime = get_mtime(original_media_path)
+                    sync_meta.video.file.fname = original_media_path.name
 
-                # Update .txt file #VIDEO header if filename changed
-                txt_path = sync_meta.txt_path()
-                if txt_path and txt_path.exists():
-                    from .sync_meta_updater import update_txt_video_header
-                    if not update_txt_video_header(txt_path, original_video_path.name, slog):
-                        slog.warning("Could not update .txt #VIDEO header after restore")
+                    # Clear transcoding metadata (video)
+                    sync_meta.custom_data.set("transcoder_codec", None)
+                    sync_meta.custom_data.set("transcoder_profile", None)
+                    sync_meta.custom_data.set("transcoder_timestamp", None)
+                    sync_meta.custom_data.set("transcoder_output_fname", None)
+                    sync_meta.custom_data.set("transcoder_source_fname", None)
+
+                    sync_meta.synchronize_to_file()
+                    sync_meta.upsert()
+                    slog.debug("Updated sync_meta after video restoration")
+
+                    # Update .txt file #VIDEO header if filename changed
+                    txt_path = sync_meta.txt_path()
+                    if txt_path and txt_path.exists():
+                        from .sync_meta_updater import update_txt_video_header
+                        if not update_txt_video_header(txt_path, original_media_path.name, slog):
+                            slog.warning("Could not update .txt #VIDEO header after restore")
+                else:
+                    slog.warning(
+                        "Could not update metadata after restore: video metadata missing. Song may show as out-of-sync."
+                    )
             else:
-                slog.warning("Could not update metadata after restore: video metadata missing. Song may show as out-of-sync.")
+                if getattr(sync_meta, "audio", None) and sync_meta.audio and sync_meta.audio.file:
+                    sync_meta.audio.file.mtime = get_mtime(original_media_path)
+                    sync_meta.audio.file.fname = original_media_path.name
+
+                    # Clear transcoding metadata (audio)
+                    sync_meta.custom_data.set("transcoder_audio_codec", None)
+                    sync_meta.custom_data.set("transcoder_audio_timestamp", None)
+                    sync_meta.custom_data.set("transcoder_audio_output_fname", None)
+                    sync_meta.custom_data.set("transcoder_audio_source_fname", None)
+
+                    sync_meta.synchronize_to_file()
+                    sync_meta.upsert()
+                    slog.debug("Updated sync_meta after audio restoration")
+
+                    # Update .txt file headers (#AUDIO and #MP3)
+                    txt_path = sync_meta.txt_path()
+                    if txt_path and txt_path.exists():
+                        from .sync_meta_updater import update_txt_audio_headers
+                        if not update_txt_audio_headers(txt_path, original_media_path.name, slog):
+                            slog.warning("Could not update .txt #AUDIO/#MP3 headers after restore")
+                else:
+                    slog.warning(
+                        "Could not update metadata after restore: audio metadata missing. Song may show as out-of-sync."
+                    )
         else:
             slog.warning("Could not update metadata after restore: SyncMeta not found. Song may show as out-of-sync.")
 
@@ -331,7 +428,9 @@ def restore_backup(
             try:
                 if backup_info.backup_path.exists():
                     backup_info.backup_path.unlink()
-                    slog.info(f"Deleted backup file after successful restore: {backup_info.backup_path.name}")
+                    slog.info(
+                        f"Deleted {backup_info.media_type} backup file after successful restore: {backup_info.backup_path.name}"
+                    )
             except Exception as e:
                 slog.warning(f"Failed to delete backup after restore: {e}")
 
@@ -346,7 +445,10 @@ def restore_backup(
             # Also clear transcoder_source_fname since the backup no longer exists
             if sync_meta:
                 try:
-                    sync_meta.custom_data.set("transcoder_source_fname", None)
+                    if backup_info.media_type == "video":
+                        sync_meta.custom_data.set("transcoder_source_fname", None)
+                    else:
+                        sync_meta.custom_data.set("transcoder_audio_source_fname", None)
                     sync_meta.synchronize_to_file()
                     sync_meta.upsert()
                 except Exception as e:

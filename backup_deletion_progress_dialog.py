@@ -23,7 +23,7 @@ class BackupDeletionProgressDialog(QtWidgets.QDialog):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        self.setWindowTitle("Deleting Video Backups")
+        self.setWindowTitle("Deleting Media Backups")
         self.setWindowIcon(icons.Icon.DELETE.icon())
         self.setFixedSize(400, 250)
         self.setWindowModality(Qt.WindowModality.WindowModal)
@@ -61,7 +61,8 @@ class BackupDeletionProgressDialog(QtWidgets.QDialog):
 
     def update_progress(self, current: int, total: int, backup: BackupInfo) -> None:
         """Update the progress display."""
-        self.lbl_status.setText(f"Deleting backup {current + 1} of {total}...")
+        media_label = getattr(backup, "media_type", "media")
+        self.lbl_status.setText(f"Deleting {media_label} backup {current + 1} of {total}...")
         self.progress_bar.setValue(current + 1)
         self.lbl_current_song.setText(f"{backup.artist} - {backup.song_title}")
         self.lbl_current_file.setText(f"{backup.backup_path.name} ({backup.size_mb:.1f} MB)")

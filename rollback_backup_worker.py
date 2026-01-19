@@ -54,7 +54,8 @@ class RollbackBackupWorker(QtCore.QThread):
 
             rollback_backup_path = self.rollback_manager.get_rollback_backup_path(
                 candidate.song_id,
-                candidate.video_path
+                candidate.video_path,
+                media_type=getattr(candidate, "media_type", "video"),
             )
 
             try:

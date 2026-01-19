@@ -47,7 +47,7 @@ class BatchPreviewDialog(QDialog):
 
     def _setup_ui(self) -> None:
         """Build UI with summary panel, table, and statistics."""
-        self.setWindowTitle("Batch Video Transcode")
+        self.setWindowTitle("Batch Media Transcode")
         self.setWindowIcon(icons.Icon.FFMPEG.icon())
         self.resize(1000, 700)
         layout = QVBoxLayout(self)
@@ -61,14 +61,22 @@ class BatchPreviewDialog(QDialog):
         
         settings_layout.addWidget(QLabel("Target Container:"), 0, 2)
         settings_layout.addWidget(QLabel(f"<b>{self.summary.target_container}</b>"), 0, 3)
+
+        # Audio target summary (always show; mixed batches are supported)
+        settings_layout.addWidget(QLabel("Target Audio:"), 1, 0)
+        settings_layout.addWidget(
+            QLabel(f"<b>{self.summary.target_audio_codec} ({self.summary.target_audio_container})</b>"),
+            1,
+            1,
+        )
         
-        settings_layout.addWidget(QLabel("Resolution:"), 1, 0)
-        settings_layout.addWidget(QLabel(f"<b>{self.summary.resolution_display}</b>"), 1, 1)
+        settings_layout.addWidget(QLabel("Resolution:"), 2, 0)
+        settings_layout.addWidget(QLabel(f"<b>{self.summary.resolution_display}</b>"), 2, 1)
+
+        settings_layout.addWidget(QLabel("FPS:"), 2, 2)
+        settings_layout.addWidget(QLabel(f"<b>{self.summary.fps_display}</b>"), 2, 3)
         
-        settings_layout.addWidget(QLabel("FPS:"), 1, 2)
-        settings_layout.addWidget(QLabel(f"<b>{self.summary.fps_display}</b>"), 1, 3)
-        
-        row = 2
+        row = 3
         if self.summary.target_codec in ("h264", "hevc"):
             settings_layout.addWidget(QLabel("Profile:"), row, 0)
             settings_layout.addWidget(QLabel(f"<b>{self.summary.target_profile}</b>"), row, 1)
@@ -104,7 +112,7 @@ class BatchPreviewDialog(QDialog):
 
         # 3. Table
         self.table = QTableWidget()
-        headers = ["", "Title", "Artist", "Codec"]
+        headers = ["", "Type", "Title", "Artist", "Codec"]
         if self.summary.target_codec in ("h264", "hevc"):
             headers.extend(["Profile", "PixFmt"])
         headers.extend(["Resolution", "FPS", "Container"])
@@ -115,8 +123,8 @@ class BatchPreviewDialog(QDialog):
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.itemChanged.connect(self._on_item_changed)
@@ -173,19 +181,26 @@ class BatchPreviewDialog(QDialog):
             cb_item.setCheckState(QtCore.Qt.CheckState.Checked if c.selected else QtCore.Qt.CheckState.Unchecked)
             cb_item.setData(QtCore.Qt.ItemDataRole.UserRole, i)
             self.table.setItem(i, 0, cb_item)
-            
-            self.table.setItem(i, 1, QTableWidgetItem(c.song_title))
-            self.table.setItem(i, 2, QTableWidgetItem(c.artist))
-            self.table.setItem(i, 3, QTableWidgetItem(c.current_codec))
-            
-            col = 4
+
+            media_type = getattr(c, "media_type", "video")
+            self.table.setItem(i, 1, QTableWidgetItem("Audio" if media_type == "audio" else "Video"))
+            self.table.setItem(i, 2, QTableWidgetItem(c.song_title))
+            self.table.setItem(i, 3, QTableWidgetItem(c.artist))
+            self.table.setItem(i, 4, QTableWidgetItem(c.current_codec))
+
+            col = 5
             if self.summary.target_codec in ("h264", "hevc"):
-                profile = c.current_profile or "—"
-                if c.current_codec.lower() not in ("h264", "avc", "hevc", "h265"):
-                    profile = "—"
+                # For audio candidates, profile/pixfmt are always blank.
+                profile = "—"
+                pixfmt = "—"
+                if media_type == "video":
+                    profile = c.current_profile or "—"
+                    if c.current_codec.lower() not in ("h264", "avc", "hevc", "h265"):
+                        profile = "—"
+                    pixfmt = c.current_pixel_format or "-"
                 self.table.setItem(i, col, QTableWidgetItem(profile))
                 col += 1
-                self.table.setItem(i, col, QTableWidgetItem(c.current_pixel_format or "-"))
+                self.table.setItem(i, col, QTableWidgetItem(pixfmt))
                 col += 1
             
             self.table.setItem(i, col, QTableWidgetItem(c.current_resolution))
@@ -226,7 +241,7 @@ class BatchPreviewDialog(QDialog):
             self.summary.rollback_enabled # This is a bit redundant but follows architecture
         )
         
-        self.lbl_selected_count.setText(f"Selected: <b>{selected_count}</b> of {visible_count} videos")
+        self.lbl_selected_count.setText(f"Selected: <b>{selected_count}</b> of {visible_count} media files")
         self.lbl_est_time.setText(f"Estimated Time: <b>{self._format_duration(total_time)}</b>")
         self.lbl_disk_space.setText(f"Disk Space Required: <b>{self._format_size(required_space)}</b>")
         

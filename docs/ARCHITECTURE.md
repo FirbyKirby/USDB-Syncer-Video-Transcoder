@@ -1,6 +1,6 @@
-# Video Transcoder Addon Architecture
+# Transcoder Addon Architecture
 
-This document is the canonical architecture reference for the Video Transcoder addon (a USDB Syncer addon). It is written for maintainers who need to:
+This document is the canonical architecture reference for the Transcoder addon (a USDB Syncer addon). It is written for maintainers who need to:
 
 - understand the runtime call flows (automatic transcode, batch transcode, backup management)
 - make safe changes around file replacement and SyncMeta updates
@@ -10,7 +10,7 @@ This document is the canonical architecture reference for the Video Transcoder a
 
 Goals
 
-- Transcode downloaded videos into a configured target codec and container.
+- Transcode downloaded media (video + standalone audio) into configured target codecs and containers.
 - Preserve USDB Syncer synchronization correctness by updating SyncMeta and the song text file.
 - Provide user-facing safety mechanisms:
   - persistent backups of originals
@@ -34,11 +34,13 @@ Non-goals
 |---|---|---|
 | Addon entrypoint | [`__init__.py`](../__init__.py) | Hook registration, config bootstrap, GUI menu wiring |
 | Config | [`config.py`](../config.py) | Dataclasses, JSON load/save, config path |
-| Analysis + decision | [`video_analyzer.py`](../video_analyzer.py) | `ffprobe` analysis and decision logic |
-| Transcoding engine | [`transcoder.py`](../transcoder.py) | Orchestrate analysis, command build, execute ffmpeg, file replacement, SyncMeta update |
-| Codec command builder | [`codecs.py`](../codecs.py) | Registry and per-codec `ffmpeg` argument builders |
+| Analysis + decision (video) | [`video_analyzer.py`](../video_analyzer.py) | `ffprobe` analysis and decision logic |
+| Analysis + decision (audio) | [`audio_analyzer.py`](../audio_analyzer.py) | `ffprobe` analysis and decision logic for standalone audio |
+| Normalization (audio) | [`audio_normalizer.py`](../audio_normalizer.py) | Optional EBU R128 `loudnorm` (two-pass) and ReplayGain tagging injection |
+| Transcoding engine | [`transcoder.py`](../transcoder.py) | Orchestrate analysis, command build, execute ffmpeg, file replacement, SyncMeta update (video + audio entry points) |
+| Codec command builder | [`codecs.py`](../codecs.py) | Registry and per-codec `ffmpeg` argument builders (video + audio) |
 | Hardware acceleration | [`hwaccel.py`](../hwaccel.py) | Accelerator registry + QuickSync probing |
-| SyncMeta + song text update | [`sync_meta_updater.py`](../sync_meta_updater.py) | Preserve resource ID, update filename + mtime, update or insert `#VIDEO:` |
+| SyncMeta + song text update | [`sync_meta_updater.py`](../sync_meta_updater.py) | Preserve resource ID, update filename + mtime, update or insert `#VIDEO:` and `#AUDIO:`/`#MP3:` |
 | Abort + progress parsing | [`utils.py`](../utils.py) | Abort signal aggregation, ffmpeg progress parsing helpers |
 | Batch workflow (GUI) | [`batch_orchestrator.py`](../batch_orchestrator.py), [`batch_worker.py`](../batch_worker.py) | Scan, selection UI, worker thread, progress/abort, results |
 | Rollback (batch) | [`rollback.py`](../rollback.py), [`rollback_backup_worker.py`](../rollback_backup_worker.py), [`rollback_backup_progress_dialog.py`](../rollback_backup_progress_dialog.py) | Pre-transcode temp backups (non-blocking creation), manifest, restore-on-abort |
@@ -46,12 +48,13 @@ Non-goals
 
 ## Configuration model
 
-The addon stores configuration in a JSON file located in the addon directory (next to the Python modules). The path is computed by [`config.get_config_path()`](../config.py:105) and created on first load by [`config.load_config()`](../config.py:110).
+The addon stores configuration in a JSON file in the USDB Syncer data directory. The path is computed by [`config.get_config_path()`](../config.py:151) and created on first load by [`config.load_config()`](../config.py:157).
 
-The root configuration object is [`config.TranscoderConfig`](../config.py:90). Two design choices are important when changing settings behavior:
+The root configuration object is [`config.TranscoderConfig`](../config.py:134). Two design choices are important when changing settings behavior:
 
-- Global operational toggles live under [`config.GeneralConfig`](../config.py:63) (timeouts, free-space guard, hardware toggles, backup toggles).
+- Global operational toggles live under [`config.GeneralConfig`](../config.py:106) (timeouts, free-space guard, hardware toggles, backup toggles).
 - Codec-specific quality and container settings live under per-codec dataclasses (for example [`config.H264Config`](../config.py:18)).
+- Standalone audio settings live under [`config.AudioConfig`](../config.py:67) (audio codec, codec-specific quality controls, normalization).
 
 ## Runtime entry points
 
@@ -59,7 +62,7 @@ The root configuration object is [`config.TranscoderConfig`](../config.py:90). T
 
 On import, the addon:
 
-1. ensures a default config exists by calling [`config.load_config()`](../config.py:110) from [`__init__.py`](../__init__.py:19)
+1. ensures a default config exists by calling [`config.load_config()`](../config.py:157) from [`__init__.py`](../__init__.py:19)
 2. registers the download hook via [`hooks.SongLoaderDidFinish.subscribe()`](../__init__.py:71)
 3. attempts to register GUI menu items (if USDB Syncer GUI is available) via [`_register_gui_hooks()`](../__init__.py:74)
 
@@ -72,7 +75,8 @@ The handler:
 - loads current settings (`auto_transcode_enabled`)
 - verifies `ffmpeg` is available
 - locates the current video path from `song.sync_meta`
-- delegates the actual work to [`transcoder.process_video()`](../transcoder.py:41)
+- delegates the actual work to [`transcoder.process_video()`](../transcoder.py:280)
+- if a standalone audio file is present in `song.sync_meta.audio` and audio transcoding is enabled, delegates to [`transcoder.process_audio()`](../transcoder.py:41)
 
 ### GUI entry points
 
@@ -99,9 +103,34 @@ flowchart TD
   J --> K[sync_meta_updater.update_sync_meta_video]
 ```
 
+Audio flow (standalone audio)
+
+```mermaid
+flowchart TD
+  A[SongLoaderDidFinish hook] --> B[transcoder.process_audio]
+  B --> C[audio_analyzer.analyze_audio]
+  C --> D{needs audio work?}
+  D -->|skip (stream copy)| E[finalize files]
+  D -->|encode| F[codecs.get_audio_codec_handler.build_encode_command]
+  F --> G{normalization enabled}
+  G -->|yes| H[audio_normalizer.analyze loudnorm pass 1]
+  H --> I[audio_normalizer.inject loudnorm pass 2 filter]
+  G -->|no| J[encode without normalization]
+  I --> K[transcoder._execute_ffmpeg]
+  J --> K
+  K --> L{verify_output enabled}
+  L -->|yes| M[audio_analyzer.analyze_audio output]
+  L -->|no| N[finalize files]
+  M --> N
+  N --> O[sync_meta_updater.update_sync_meta_audio]
+```
+
 ## Core transcoding pipeline
 
-The orchestration logic lives in [`transcoder.process_video()`](../transcoder.py:41).
+The orchestration logic lives in:
+
+- video: [`transcoder.process_video()`](../transcoder.py:280)
+- audio: [`transcoder.process_audio()`](../transcoder.py:41)
 
 ### Step 1: Analyze input video
 
@@ -135,7 +164,7 @@ The file is transcoded if any of the following are true:
 
 Force mode
 
-- If [`config.GeneralConfig.force_transcode`](../config.py:64) is enabled, the addon will transcode even when `needs_transcoding` returns false (but it still performs analysis and disk space checks).
+- If [`config.GeneralConfig.force_transcode_video`](../config.py:106) is enabled, the addon will transcode even when `needs_transcoding` returns false (but it still performs analysis and disk space checks).
 
 ### Step 4: Select codec handler and build the ffmpeg command
 
@@ -156,6 +185,12 @@ Common conventions across handlers
   - MP4/MOV: prefer copying `aac/mp3/alac`, otherwise encode to AAC
   - WebM/MKV: prefer copying `opus/vorbis`, otherwise encode to Opus
 
+Standalone audio strategy
+
+- The audio handler controls the output container and codec.
+- When `audio_normalization_enabled` is false and `force_transcode_audio` is false, the audio pipeline may use stream copy when codec and container already match.
+- When normalization is enabled, stream copy is disabled because filters require re-encoding.
+
 ### Step 5: Hardware acceleration (encode and decode)
 
 Hardware acceleration selection happens inside [`transcoder.process_video()`](../transcoder.py:41) using:
@@ -166,8 +201,8 @@ Hardware acceleration selection happens inside [`transcoder.process_video()`](..
 Important behavior
 
 - Encode and decode are independently controlled by:
-  - [`config.GeneralConfig.hardware_encoding`](../config.py:64)
-  - [`config.GeneralConfig.hardware_decode`](../config.py:64)
+  - [`config.GeneralConfig.hardware_encoding`](../config.py:106)
+  - [`config.GeneralConfig.hardware_decode`](../config.py:106)
 - If hardware encoding is enabled and resolution or FPS filters are requested, hardware decoding is explicitly disabled for that run to avoid hardware-surface filter pipeline issues.
 
 Current implementation
@@ -192,7 +227,7 @@ Key behaviors
 
 - Parses stderr lines containing `time=` using [`utils.parse_ffmpeg_progress()`](../utils.py:77) and logs progress roughly every 5 seconds.
 - Supports a UI progress callback (used by batch UI) to show percent, FPS, speed, and ETA.
-- Enforces a hard timeout via [`config.GeneralConfig.timeout_seconds`](../config.py:64).
+- Enforces a hard timeout via [`config.GeneralConfig.timeout_seconds`](../config.py:106).
 
 Abort behavior
 
@@ -214,7 +249,7 @@ Subprocess environment hygiene
 
 ### Step 7: Verify output (optional)
 
-If [`config.GeneralConfig.verify_output`](../config.py:64) is enabled, the addon re-runs `ffprobe` on the temporary output via [`video_analyzer.analyze_video()`](../video_analyzer.py:60) and fails the operation if the output cannot be analyzed.
+If [`config.GeneralConfig.verify_output`](../config.py:106) is enabled, the addon re-runs `ffprobe` on the temporary output via [`video_analyzer.analyze_video()`](../video_analyzer.py:60) and fails the operation if the output cannot be analyzed.
 
 ### Step 8: Finalize files and update SyncMeta
 
@@ -254,6 +289,9 @@ Related helper
 
 The addon supports user-visible persistent backups next to the song files.
 
+- Video backups use `transcoder_source_fname` in `sync_meta.custom_data`.
+- Audio backups use `transcoder_audio_source_fname` in `sync_meta.custom_data`.
+
 Creation paths
 
 - Automatic and batch transcodes back up the original file in [`transcoder.process_video()`](../transcoder.py:41) by renaming it before replacing the output.
@@ -268,16 +306,22 @@ Discovery and management
 
 ## Batch transcoding architecture
 
-Batch transcoding is a GUI-driven workflow orchestrated by [`BatchTranscodeOrchestrator`](../batch_orchestrator.py:155).
+Batch transcoding is a GUI-driven workflow orchestrated by [`BatchTranscodeOrchestrator`](../batch_orchestrator.py:216).
+
+It can include:
+
+- video candidates (analyzed via [`video_analyzer.analyze_video()`](../video_analyzer.py:60))
+- standalone audio candidates (analyzed via [`audio_analyzer.analyze_audio()`](../audio_analyzer.py:41))
 
 There is also a non-GUI batch helper module, [`batch.py`](../batch.py), which exposes iterator-style discovery via [`find_videos_needing_transcode()`](../batch.py:41). The current GUI workflow does not call this module directly.
 
 ### Phase 1: Scan
 
 - Runs in a background thread [`batch_orchestrator.ScanWorker`](../batch_orchestrator.py:102)
-- Enumerates SyncMeta records in the song directory, analyzes videos, and selects candidates using:
+- Enumerates SyncMeta records in the song directory, analyzes media, and selects candidates using:
   - [`video_analyzer.analyze_video()`](../video_analyzer.py:60)
   - [`video_analyzer.needs_transcoding()`](../video_analyzer.py:232)
+  - [`audio_analyzer.analyze_audio()`](../audio_analyzer.py:41)
 
 ### Phase 2: Preview and selection
 
@@ -288,7 +332,10 @@ There is also a non-GUI batch helper module, [`batch.py`](../batch.py), which ex
 
 - If rollback protection is enabled, the orchestrator first creates pre-transcode rollback backups via [`BatchTranscodeOrchestrator._create_rollback_backups()`](../batch_orchestrator.py:371). Backup copies are created on a background thread (see [`RollbackBackupWorker.run()`](../rollback_backup_worker.py:41)) while a modal progress dialog is shown (see [`RollbackBackupProgressDialog`](../rollback_backup_progress_dialog.py:26)). The user can cancel this phase, which aborts the batch before transcoding begins.
 - Work is performed on a `QThread` in [`BatchWorker.run()`](../batch_worker.py:108).
-- For each selected candidate, the worker calls the same core engine [`transcoder.process_video()`](../transcoder.py:41) and forwards progress updates to the UI.
+- For each selected candidate, the worker calls the appropriate engine:
+  - [`transcoder.process_video()`](../transcoder.py:280)
+  - [`transcoder.process_audio()`](../transcoder.py:41)
+  and forwards progress updates to the UI.
 
 Abort propagation
 
@@ -376,3 +423,4 @@ Restore
 - Batch usage walkthrough: [`docs/BATCH_TRANSCODING.md`](BATCH_TRANSCODING.md)
 - Configuration reference: [`docs/CONFIGURATION.md`](CONFIGURATION.md)
 - Troubleshooting: [`docs/TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
+- Audio guide: [`docs/AUDIO_TRANSCODING.md`](AUDIO_TRANSCODING.md)

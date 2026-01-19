@@ -26,6 +26,7 @@ from .rollback import RollbackManager
 from .rollback_backup_progress_dialog import RollbackBackupProgressDialog
 from .rollback_backup_worker import RollbackBackupWorker
 from .video_analyzer import analyze_video, needs_transcoding
+from .utils import is_audio_file
 
 if TYPE_CHECKING:
     from .config import TranscoderConfig
@@ -36,15 +37,18 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class BatchTranscodeCandidate:
-    """Single video candidate for batch transcoding."""
+    """Single media candidate for batch transcoding."""
     song_id: SongId
-    video_path: Path
     song_title: str
     artist: str
+
+    video_path: Path
+    media_type: Literal["video", "audio"]
     
     # Current properties
     current_codec: str
-    current_resolution: str  # e.g., "1920x1080"
+    # Audio candidates will use placeholder values.
+    current_resolution: str  # e.g., "1920x1080" or "—"
     current_fps: float
     current_container: str
     current_size_mb: float
@@ -71,9 +75,13 @@ class BatchTranscodeCandidate:
 
 @dataclass
 class BatchTranscodeSummary:
-    """Summary configuration for entire batch (same for all videos)."""
+    """Summary configuration for entire batch."""
     target_codec: str
     target_container: str
+
+    # Audio target (for audio candidates)
+    target_audio_codec: str
+    target_audio_container: str
     
     # Resolution setting (depends on USDB integration vs manual)
     resolution_display: str  # Human-readable, e.g., "Max: 1080p" or "Exact: 1080p" or "Original"
@@ -106,7 +114,7 @@ class ScanWorker(QtCore.QThread):
 
     # Signals
     progress = QtCore.Signal(int, int, str)  # current, total, filename
-    finished = QtCore.Signal(list)  # list of (song_id, video_path, video_info)
+    finished = QtCore.Signal(list)  # list of (song_id, media_path, info, media_type)
     aborted = QtCore.Signal()
 
     def __init__(self, cfg: TranscoderConfig):
@@ -120,10 +128,13 @@ class ScanWorker(QtCore.QThread):
 
     def run(self) -> None:
         """Execute library scan."""
+        from .audio_analyzer import analyze_audio
+        from .codecs import get_audio_codec_handler
+
         # Connect to database in this thread
         db.connect(AppPaths.db)
         
-        results = []
+        results: list[tuple[SongId, Path, object, Literal["video", "audio"]]] = []
         song_dir = settings.get_song_dir()
         
         # We need to count total songs first for progress
@@ -134,22 +145,70 @@ class ScanWorker(QtCore.QThread):
             if self._abort_requested:
                 self.aborted.emit()
                 return
-            
-            video_path = sync_meta.path.parent / sync_meta.video.file.fname if sync_meta.video and sync_meta.video.file and sync_meta.video.file.fname else None
-            if not video_path or not video_path.exists():
-                continue
 
-            self.progress.emit(i, total, video_path.name)
-            
-            info = analyze_video(video_path)
-            if not info:
-                continue
+            # Discover BOTH video and audio media paths for this song.
+            video_path = (
+                sync_meta.path.parent / sync_meta.video.file.fname
+                if sync_meta.video and sync_meta.video.file and sync_meta.video.file.fname
+                else None
+            )
+            audio_path = (
+                sync_meta.path.parent / sync_meta.audio.file.fname
+                if getattr(sync_meta, "audio", None)
+                and sync_meta.audio
+                and sync_meta.audio.file
+                and sync_meta.audio.file.fname
+                else None
+            )
 
-            if self.cfg.general.force_transcode:
-                _logger.debug(f"Including {video_path.name} (force transcode enabled)")
-                results.append((sync_meta.song_id, video_path, info))
-            elif needs_transcoding(info, self.cfg):
-                results.append((sync_meta.song_id, video_path, info))
+            # Prefer scanning video first so progress feels familiar.
+            for media_type, media_path in (("video", video_path), ("audio", audio_path)):
+                if self._abort_requested:
+                    self.aborted.emit()
+                    return
+
+                if not media_path or not media_path.exists():
+                    continue
+
+                # Skip non-audio for audio scans (defensive; helps if SyncMeta points to a container file).
+                if media_type == "audio" and not is_audio_file(media_path):
+                    continue
+
+                self.progress.emit(i, total, media_path.name)
+
+                if media_type == "video":
+                    info = analyze_video(media_path)
+                    if not info:
+                        continue
+
+                    if self.cfg.general.force_transcode_video:
+                        _logger.debug(f"Including {media_path.name} (force transcode enabled)")
+                        results.append((sync_meta.song_id, media_path, info, "video"))
+                    elif needs_transcoding(info, self.cfg):
+                        results.append((sync_meta.song_id, media_path, info, "video"))
+                else:
+                    # Audio scanning respects audio enable flag.
+                    if not bool(self.cfg.audio.audio_transcode_enabled):
+                        continue
+
+                    info = analyze_audio(media_path)
+                    if not info:
+                        continue
+
+                    handler = get_audio_codec_handler(self.cfg.audio.audio_codec)
+                    if not handler:
+                        continue
+
+                    container_matches = handler.is_container_compatible(media_path)
+                    codec_matches = (info.codec_name.lower() == self.cfg.audio.audio_codec.lower())
+                    normalization_requested = bool(self.cfg.audio.audio_normalization_enabled)
+                    force_audio = bool(getattr(self.cfg.audio, "force_transcode_audio", False))
+                    needs_audio = force_audio or normalization_requested or (not container_matches) or (not codec_matches)
+
+                    if needs_audio:
+                        if force_audio and container_matches and codec_matches and not normalization_requested:
+                            _logger.debug(f"Including {media_path.name} (force audio transcode enabled)")
+                        results.append((sync_meta.song_id, media_path, info, "audio"))
 
         self.finished.emit(results)
 
@@ -190,9 +249,15 @@ class BatchTranscodeOrchestrator:
         self._show_results()
     
     def _generate_preview(self) -> bool:
-        """Generate preview data for all candidate videos."""
+        """Generate preview data for all candidate media files."""
         # Show a simple progress dialog for scanning
-        progress = QtWidgets.QProgressDialog("Scanning library for videos needing transcoding...", "Cancel", 0, 100, self.parent)
+        progress = QtWidgets.QProgressDialog(
+            "Scanning library for media files needing transcoding...",
+            "Cancel",
+            0,
+            100,
+            self.parent,
+        )
         progress.setWindowIcon(icons.Icon.FFMPEG.icon())
         progress.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
@@ -205,7 +270,7 @@ class BatchTranscodeOrchestrator:
         def on_progress(current, total, filename):
             progress.setMaximum(total)
             progress.setValue(current)
-            progress.setLabelText(f"Scanning video {current+1} of {total}: {filename}")
+            progress.setLabelText(f"Scanning {current+1} of {total}: {filename}")
 
         def on_finished(results):
             nonlocal scan_results
@@ -222,10 +287,10 @@ class BatchTranscodeOrchestrator:
         worker.aborted.connect(on_aborted)
         progress.canceled.connect(worker.abort)
 
-        if self.cfg.general.force_transcode:
+        if self.cfg.general.force_transcode_video:
             _logger.info("Starting library scan for all videos (force transcode enabled)...")
         else:
-            _logger.info("Starting library scan for videos needing transcode...")
+            _logger.info("Starting library scan for media files needing transcode...")
         start_scan = time.time()
         worker.start()
         progress.exec()
@@ -237,53 +302,83 @@ class BatchTranscodeOrchestrator:
         _logger.info(f"Library scan completed in {time.time() - start_scan:.2f}s. Found {len(scan_results)} candidates.")
         
         if not scan_results:
-            QtWidgets.QMessageBox.information(self.parent, "Batch Video Transcode", "No videos found that need transcoding with current settings.")
+            QtWidgets.QMessageBox.information(
+                self.parent,
+                "Batch Media Transcode",
+                "No media files found that need transcoding with current settings.",
+            )
             return False
             
         # 2. Create candidates from scan results
         self.candidates = []
         hw_accel_available = self._is_hw_accel_available()
         
-        for song_id, video_path, info in scan_results:
+        for song_id, media_path, info, media_type in scan_results:
             # Get song info for display
             from usdb_syncer.usdb_song import UsdbSong
             song = UsdbSong.get(song_id)
-            title = song.title if song else video_path.stem
+            title = song.title if song else media_path.stem
             artist = song.artist if song else "Unknown"
-            
+
             # Estimates
-            est_size = BatchEstimator.estimate_output_size(info, self.cfg)
-            est_time = BatchEstimator.estimate_transcode_time(info, self.cfg, hw_accel_available)
-            
+            if media_type == "video":
+                est_size = BatchEstimator.estimate_output_size(info, self.cfg)  # type: ignore[arg-type]
+                est_time = BatchEstimator.estimate_transcode_time(info, self.cfg, hw_accel_available)  # type: ignore[arg-type]
+                current_resolution = f"{info.width}x{info.height}"  # type: ignore[attr-defined]
+                current_fps = float(info.frame_rate)  # type: ignore[attr-defined]
+                current_profile = getattr(info, "profile", None)
+                current_pixel_format = getattr(info, "pixel_format", None)
+                current_bitrate_kbps = getattr(info, "bitrate_kbps", None)
+            else:
+                # Audio: use conservative estimates (audio is usually much faster than realtime).
+                current_resolution = "—"
+                current_fps = 0.0
+                current_profile = None
+                current_pixel_format = None
+                current_bitrate_kbps = getattr(info, "bitrate_kbps", None)
+                est_size = (media_path.stat().st_size / (1024 * 1024))
+                est_time = max(1.0, float(getattr(info, "duration_seconds", 0.0)) * 0.1)
+
             candidate = BatchTranscodeCandidate(
                 song_id=song_id,
-                video_path=video_path,
+                video_path=media_path,
+                media_type=media_type,
                 song_title=title,
                 artist=artist,
-                current_codec=info.codec_name,
-                current_resolution=f"{info.width}x{info.height}",
-                current_fps=info.frame_rate,
-                current_container=info.container,
-                current_size_mb=video_path.stat().st_size / (1024 * 1024),
-                duration_seconds=info.duration_seconds,
-                current_profile=info.profile,
-                current_pixel_format=info.pixel_format,
-                current_bitrate_kbps=info.bitrate_kbps,
-                estimated_output_size_mb=est_size,
-                estimated_time_seconds=est_time
+                current_codec=getattr(info, "codec_name", "unknown"),
+                current_resolution=current_resolution,
+                current_fps=current_fps,
+                current_container=getattr(info, "container", media_path.suffix.lstrip(".").lower()),
+                current_size_mb=media_path.stat().st_size / (1024 * 1024),
+                duration_seconds=float(getattr(info, "duration_seconds", 0.0)),
+                current_profile=current_profile,
+                current_pixel_format=current_pixel_format,
+                current_bitrate_kbps=current_bitrate_kbps,
+                estimated_output_size_mb=float(est_size),
+                estimated_time_seconds=float(est_time),
             )
             self.candidates.append(candidate)
             
         if not self.candidates:
-            QtWidgets.QMessageBox.information(self.parent, "Batch Video Transcode", "No valid videos found for transcoding.")
+            QtWidgets.QMessageBox.information(
+                self.parent,
+                "Batch Media Transcode",
+                "No valid media files found for transcoding.",
+            )
             return False
             
         # 3. Create summary
         codec_cfg = getattr(self.cfg, self.cfg.target_codec)
+
+        from .codecs import get_audio_codec_handler
+        audio_handler = get_audio_codec_handler(self.cfg.audio.audio_codec)
+        audio_container = audio_handler.capabilities().container if audio_handler else "m4a"
         
         self.summary = BatchTranscodeSummary(
             target_codec=self.cfg.target_codec,
             target_container=codec_cfg.container,
+            target_audio_codec=self.cfg.audio.audio_codec,
+            target_audio_container=audio_container,
             resolution_display=self._format_resolution_display(),
             resolution_value=self.cfg.general.max_resolution,
             resolution_is_limit=self.cfg.usdb_integration.use_usdb_resolution,
@@ -294,8 +389,8 @@ class BatchTranscodeOrchestrator:
             target_profile=getattr(codec_cfg, "profile", None),
             target_pixel_format=getattr(codec_cfg, "pixel_format", None),
             target_bitrate_kbps=self.cfg.general.max_bitrate_kbps,
-            total_videos=len(self.candidates),
-            selected_videos=len(self.candidates),
+            total_videos=len([c for c in self.candidates if c.media_type == "video"]),
+            selected_videos=len([c for c in self.candidates if c.media_type == "video" and c.selected]),
             total_estimated_time_seconds=sum(c.estimated_time_seconds for c in self.candidates),
             total_disk_space_required_mb=BatchEstimator.calculate_disk_space_required(self.candidates, False, self.cfg.general.backup_original),
             current_free_space_mb=BatchEstimator.get_free_disk_space(self.candidates[0].video_path),
@@ -378,13 +473,16 @@ class BatchTranscodeOrchestrator:
         self.rollback_manager = RollbackManager(self.cfg)
         self._rollback_dir = self.rollback_manager.enable_rollback()
         
-        # Record which videos already have user backups
+        # Record which media files already have user backups
         self._existing_user_backups.clear()
         for candidate in selected_candidates:
             user_backup_path = candidate.video_path.with_name(
                 f"{candidate.video_path.stem}{self.cfg.general.backup_suffix}{candidate.video_path.suffix}"
             )
             if user_backup_path.exists():
+                # NOTE: This is keyed by song_id for legacy behavior.
+                # If a song ever has both video+audio in the same batch, this will be overwritten.
+                # That's acceptable for now; the rollback entries still preserve correct paths.
                 self._existing_user_backups[candidate.song_id] = user_backup_path
         
         _logger.info("Creating pre-transcode rollback backups...")
@@ -497,11 +595,12 @@ class BatchTranscodeOrchestrator:
                     _logger.error(f"Failed to update user backup for {candidate.song_title}: {e}")
 
     def _on_video_success(self, candidate: BatchTranscodeCandidate) -> None:
-        """Called by worker when a video is successfully transcoded."""
+        """Called by worker when a media file is successfully transcoded."""
         if self.rollback_manager and candidate.result and candidate.result.output_path:
             rollback_backup_path = self.rollback_manager.get_rollback_backup_path(
                 candidate.song_id,
-                candidate.video_path
+                candidate.video_path,
+                media_type=candidate.media_type,
             )
             
             # Check if rollback backup exists (should if we created it pre-transcode)
@@ -514,6 +613,7 @@ class BatchTranscodeOrchestrator:
             
             self.rollback_manager.record_transcode(
                 candidate.song_id,
+                candidate.media_type,
                 candidate.video_path,
                 rollback_backup_path,
                 candidate.result.output_path,
@@ -521,7 +621,7 @@ class BatchTranscodeOrchestrator:
             )
 
     def _get_completed_count(self) -> int:
-        """Count how many selected videos have finished."""
+        """Count how many selected media files have finished."""
         return sum(1 for c in self.candidates if c.selected and c.status in ("success", "failed", "aborted"))
 
     def _handle_abort(self) -> None:

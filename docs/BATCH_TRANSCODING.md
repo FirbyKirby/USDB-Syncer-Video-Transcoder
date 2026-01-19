@@ -1,21 +1,27 @@
+
 # Batch Transcoding — Comprehensive Guide
 
-This guide explains the end-to-end workflow for batch transcoding synchronized videos with the Video Transcoder addon. It covers user experience, advanced options, troubleshooting, and technical details.
+This guide explains the end-to-end workflow for batch transcoding synchronized media (video + standalone audio) with the Transcoder addon. It covers user experience, advanced options, troubleshooting, and technical details.
 
 ## 1) Overview
 
-Batch transcoding converts an existing library of synchronized videos to your configured target codec and limits in one operation. Use it when:
+Batch transcoding converts an existing library of synchronized media files to your configured targets in one operation. Use it when:
 - You changed codec or quality settings and want your library standardized
 - You enabled strict matching and want non-conforming videos updated
 - You migrated devices and need a uniform, compatible format
 
-Entry point: Tools → Batch Video Transcode. Internally this launches [BatchTranscodeOrchestrator.start_batch_workflow()](../batch_orchestrator.py:164).
+Supported media types
+
+- **Video** referenced by SyncMeta video
+- **Standalone audio** referenced by SyncMeta audio (when present)
+
+Entry point: Tools → Batch Media Transcode. Internally this launches [BatchTranscodeOrchestrator.start_batch_workflow()](../batch_orchestrator.py:235).
 
 ## 2) Prerequisites
 
 - FFMPEG/FFPROBE available and working. Verification steps are in [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 - Sufficient free disk space for outputs, temporary files, and optional backups. The preview dialog estimates required disk space and disables the Start button if insufficient (estimation is heuristic and conservative)
-- Optional hardware acceleration supported and enabled via [config.GeneralConfig](../config.py:64)
+- Optional hardware acceleration supported and enabled via [config.GeneralConfig](../config.py:106)
 
 Warnings
 - Ensure plenty of free space. The dialog will compute required space, but real outputs can vary
@@ -24,14 +30,16 @@ Warnings
 ## 3) Step-by-Step Walkthrough
 
 1. Launching the batch transcode
-- Open Tools → Batch Video Transcode
-- Orchestrator: [BatchTranscodeOrchestrator.start_batch_workflow()](../batch_orchestrator.py:164)
+- Open Tools → Batch Media Transcode
+- Orchestrator: [BatchTranscodeOrchestrator.start_batch_workflow()](../batch_orchestrator.py:235)
 
 2. Understanding the preview dialog
-- The orchestrator scans synchronized songs, identifies videos that need transcoding, analyzes them, and computes estimates
+- The orchestrator scans synchronized songs, identifies media files that need transcoding, analyzes them, and computes estimates
   - Preview generation: [BatchTranscodeOrchestrator._generate_preview()](../batch_orchestrator.py:180)
-  - Analysis: [video_analyzer.analyze_video()](../video_analyzer.py:60)
-  - Decision logic: [video_analyzer.needs_transcoding()](../video_analyzer.py:198)
+  - Analysis (video): [video_analyzer.analyze_video()](../video_analyzer.py:60)
+  - Analysis (audio): [audio_analyzer.analyze_audio()](../audio_analyzer.py:41)
+  - Decision logic (video): [video_analyzer.needs_transcoding()](../video_analyzer.py:198)
+  - Decision logic (audio): handled in the scan worker based on codec/container/normalization settings (see [batch_orchestrator.ScanWorker.run()](../batch_orchestrator.py:129))
   - Size/time estimation: [BatchEstimator.estimate_output_size()](../batch_estimator.py:19), [BatchEstimator.estimate_transcode_time()](../batch_estimator.py:89)
 
 3. Filtering and selecting videos
@@ -70,8 +78,8 @@ Warnings
 
 9. Understanding results
 - Summary shows counts of succeeded/failed/aborted among selected items. When rollback is used, rollback status may also appear in the report
-- Detailed table lists each video’s status, change summary, and any error
-- Results dialog: [batch_results_dialog.py](../batch_results_dialog.py)
+- Detailed table lists each media item’s status, change summary, and any error
+  - Results dialog: [batch_results_dialog.py](../batch_results_dialog.py)
 
 10. Exporting reports
 - Export the detailed results to CSV or copy a text summary to the clipboard
@@ -84,13 +92,26 @@ Rollback system details
 - Manager: [RollbackManager](../rollback.py), enabling via [RollbackManager.enable_rollback()](../rollback.py:66), restoration via [RollbackManager.rollback_all()](../rollback.py:90)
 
 Interaction with backup settings
-- If [config.GeneralConfig.backup_original](../config.py:64) is true, originals are preserved automatically using the configured suffix
+- If [config.GeneralConfig.backup_original](../config.py:106) is true, originals are preserved automatically using the configured suffix
 - Rollback data is cleaned after a fully successful batch by [RollbackManager.cleanup_rollback_data()](../rollback.py:173)
 - If you abort a batch and then decline rollback when prompted, rollback temp directories may persist (for safety) and require manual cleanup
 
 Backup types (important distinction)
 - **Rollback copies**: Temporary backups in a system temp folder, used only for the current batch operation (to support rollback after abort)
-- **Persistent backups**: Controlled by the `backup_original` setting, stored next to your video files, retained after the batch completes
+- **Persistent backups**: Controlled by the `backup_original` setting, stored next to your media files, retained after the batch completes
+
+## Mixed batches (video + audio)
+
+It’s normal for a single batch run to include both:
+
+- video candidates that exceed video limits or don’t match your target video codec/container
+- audio candidates that don’t match your target audio codec/container, or have normalization enabled, or have `force_transcode_audio` enabled
+
+Practical notes
+
+- Audio transcodes are usually much faster than video transcodes.
+- Hardware acceleration (QuickSync) applies to video encodes; audio encodes are typically CPU-only.
+- Rollback and backup handling are still per-file: each processed media file is replaced atomically and can be restored if rollback is enabled.
 
 USDB integration for resolution/FPS
 - The preview shows whether resolution/FPS limits are sourced from USDB Syncer settings or exact values

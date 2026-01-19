@@ -1,25 +1,25 @@
-# Video Transcoder — Configuration Guide
+# Transcoder — Configuration Guide
 
 This guide explains every configuration option, default values, recommended settings, and provides ready-to-use examples for common goals.
 
 Where the file lives
-- The runtime config is created on addon load in the USDB Syncer data directory as `video_transcoder_config.json` by [config.load_config()](../config.py:110).
+- The runtime config is created on addon load in the USDB Syncer data directory as `transcoder_config.json` by [config.load_config()](../config.py:157).
 - Exact path varies by platform:
-  - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\video_transcoder_config.json`
-  - macOS: `~/Library/Application Support/bohning/usdb_syncer/video_transcoder_config.json`
-  - Linux: `~/.local/share/bohning/usdb_syncer/video_transcoder_config.json`
+  - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
+  - macOS: `~/Library/Application Support/bohning/usdb_syncer/transcoder_config.json`
+  - Linux: `~/.local/share/bohning/usdb_syncer/transcoder_config.json`
 
 Note: The repository includes [config.json.example](../config.json.example:1) as a template for reference. It is not the runtime config file.
 
 How to edit
-- **Recommended**: Use the GUI via **Tools → Video Transcoder Settings** in USDB Syncer.
-- **Manual (advanced)**: Close USDB Syncer, edit `video_transcoder_config.json` in the USDB Syncer data directory (see paths above), then restart USDB Syncer.
+- **Recommended**: Use the GUI via **Tools → Transcoder Settings** in USDB Syncer.
+- **Manual (advanced)**: Close USDB Syncer, edit `transcoder_config.json` in the USDB Syncer data directory (see paths above), then restart USDB Syncer.
 
 Note: JSON does not support comments. Examples below include only the keys you need to change. Unspecified options keep their existing values.
 
 ## Top-level structure
 
-Options are defined by [config.TranscoderConfig](../config.py:91):
+Options are defined by [config.TranscoderConfig](../config.py:134):
 - version: configuration schema version (int)
 - auto_transcode_enabled: enable/disable automatic video transcoding after song downloads (bool)
 - target_codec: which codec to encode to: h264, hevc, vp8, vp9, or av1
@@ -28,7 +28,8 @@ Options are defined by [config.TranscoderConfig](../config.py:91):
 - vp8: VP8-specific options from [config.VP8Config](../config.py:29)
 - vp9: VP9-specific options from [config.VP9Config](../config.py:47)
 - av1: AV1-specific options from [config.AV1Config](../config.py:56)
-- general: global options from [config.GeneralConfig](../config.py:64)
+- audio: standalone audio transcoding options from [config.AudioConfig](../config.py:67)
+- general: global options from [config.GeneralConfig](../config.py:106)
 - usdb_integration: optional USDB Syncer settings integration from [config.UsdbIntegrationConfig](../config.py:83)
 
 ## Option reference and defaults
@@ -64,7 +65,7 @@ AV1 block [config.AV1Config](../config.py:56)
 - cpu_used: speed/quality tradeoff: 0-13. Default: 8
 - container: output container extension. Default: mkv
 
-General block [config.GeneralConfig](../config.py:64)
+General block [config.GeneralConfig](../config.py:106)
 - hardware_encoding: enable hardware encoding if available. Default: true
 - hardware_decode: allow hardware decoders. Default: true
   - ⚠️ **Hardware Decode Limitation:** Hardware decoding is primarily intended for use with hardware encoding. Using hardware decode with software encode may cause pipeline issues.
@@ -72,7 +73,8 @@ General block [config.GeneralConfig](../config.py:64)
 - backup_suffix: suffix inserted before the extension of the source; results in name-source.ext. Default: -source
 - timeout_seconds: max time to allow FFMPEG to run. Default: 600
 - verify_output: analyze output after encode; deletes bad outputs. Default: true
-- force_transcode (boolean, default: false): When enabled, forces transcoding of all videos even if they already match the target codec and quality settings. Affects both single-file and batch operations
+- force_transcode_video (boolean, default: false): When enabled, forces transcoding of all videos even if they already match the target codec and quality settings. Affects both single-file and batch operations
+- force_transcode_audio (boolean, default: false): When enabled, forces re-transcoding of audio even if codec/container match; disables stream-copy optimization
 - min_free_space_mb: abort if free space below this value. Default: 500
 - max_resolution: optional resolution rule. Default: null
 - max_fps: optional FPS rule. Default: null
@@ -95,6 +97,163 @@ USDB integration block [config.UsdbIntegrationConfig](../config.py:83)
 
 Warning: If you disable verify_output, corrupt outputs may slip through if FFMPEG succeeds but writes an unreadable file.
 
+## Audio block (standalone audio) [config.AudioConfig](../config.py:67)
+
+This section controls transcoding and normalization of **standalone audio files referenced by SyncMeta**.
+
+Important notes
+
+- This does **not** change the audio track inside videos. Video transcoding handles audio streams inside the video output as part of the video codec handlers.
+- Audio processing runs:
+  - automatically after download (when `audio.audio_transcode_enabled` is true), and
+  - during batch operations (Tools → Batch Media Transcode) when enabled.
+
+### Audio enable/force settings
+
+- `audio_transcode_enabled` (boolean, default: true)
+  - Enables processing of standalone audio files.
+  - When false, audio files are left as-downloaded.
+
+- `force_transcode_audio` (boolean, default: false)
+  - Forces re-encoding even if the input already matches the target codec/container.
+  - Also disables stream-copy optimization.
+
+When to use `force_transcode_audio`
+
+- You changed codec or quality settings and want to standardize your library.
+- You enabled normalization and want to rewrite files.
+- You suspect an audio file is damaged or inconsistent.
+
+### Audio codec selection
+
+- `audio_codec` (string, default: `"aac"`)
+  - Allowed values: `"mp3"`, `"vorbis"`, `"aac"`, `"opus"`
+
+Containers (how the output filename extension is chosen)
+
+- `aac` → `.m4a`
+- `mp3` → `.mp3`
+- `vorbis` → `.ogg`
+- `opus` → `.opus`
+
+Codec selection recommendations
+
+- **AAC (`aac`)**: best “default” for broad compatibility while keeping good quality at moderate sizes.
+- **MP3 (`mp3`)**: widest compatibility (very old players/devices); often slightly larger for the same perceived quality.
+- **Vorbis (`vorbis`)**: open format; support depends on player.
+- **Opus (`opus`)**: very efficient; great quality/size ratio, but requires newer decoder support in some environments.
+
+### Audio codec quality settings
+
+Audio quality controls are codec-specific. Only the relevant setting for your chosen codec is used.
+
+- `mp3_quality` (integer, default: 0)
+  - Range: `0` to `9`
+  - Lower is better quality (larger files).
+  - Maps to FFmpeg/LAME VBR quality (`-q:a`).
+  - Recommended:
+    - `0–2`: transparent/very high quality
+    - `3–5`: smaller files, still good for most content
+
+- `vorbis_quality` (number, default: 10.0)
+  - Range: `-1.0` to `10.0`
+  - Higher is better quality (larger files).
+  - Maps to FFmpeg Vorbis quality scale (`-q:a`).
+  - Recommended:
+    - `8.0–10.0`: very high quality
+    - `5.0–7.0`: smaller files
+
+- `aac_vbr_mode` (integer, default: 5)
+  - Range: `1` to `5`
+  - Higher is better quality (larger files).
+  - Maps to FFmpeg AAC VBR mode (`-vbr`).
+  - Recommended:
+    - `5`: highest quality
+    - `3`: balanced
+
+- `opus_bitrate_kbps` (integer, default: 160)
+  - Range: `6` to `510`
+  - Target bitrate in kbps.
+  - Maps to `-b:a <kbps>k`.
+  - Recommended:
+    - `96–128`: good quality for most music
+    - `160`: very high quality for music
+
+### Audio normalization settings
+
+Normalization makes tracks play at a more consistent perceived loudness.
+
+- `audio_normalization_enabled` (boolean, default: false)
+  - When enabled, stream copy is disabled and audio is re-encoded.
+
+- `audio_normalization_method` (string, default: `"loudnorm"`)
+  - Allowed values: `"loudnorm"`, `"replaygain"`
+  - `loudnorm` uses a two-pass EBU R128 workflow (measure, then apply).
+  - `replaygain` writes ReplayGain tags when supported by the output container/player.
+
+- `audio_normalization_target` (number, default: -18.0)
+  - Target integrated loudness in **LUFS**.
+  - More negative is quieter.
+  - Common music/karaoke targets are around `-18.0` LUFS.
+
+- `audio_normalization_true_peak` (number, default: -2.0)
+  - Target true peak in **dBTP**.
+  - Helps avoid clipping after normalization.
+
+- `audio_normalization_lra` (number, default: 11.0)
+  - Target loudness range in **LU**.
+  - Higher values preserve more dynamics; lower values reduce dynamics.
+
+User-friendly terms
+
+- **LUFS**: a measurement of perceived loudness (integrated loudness over time).
+- **EBU R128**: the standard that defines how loudness is measured/normalized.
+- **dBTP (true peak)**: peak measurement that better predicts clipping than simple sample peaks.
+
+## Audio configuration examples
+
+### Example: Keep the default AAC output, no normalization
+
+```json
+{
+  "audio": {
+    "audio_transcode_enabled": true,
+    "audio_codec": "aac",
+    "aac_vbr_mode": 5,
+    "audio_normalization_enabled": false
+  }
+}
+```
+
+### Example: MP3 output for maximum compatibility
+
+```json
+{
+  "audio": {
+    "audio_transcode_enabled": true,
+    "audio_codec": "mp3",
+    "mp3_quality": 2
+  }
+}
+```
+
+### Example: Opus output + loudness normalization (recommended for consistent playback)
+
+```json
+{
+  "audio": {
+    "audio_transcode_enabled": true,
+    "audio_codec": "opus",
+    "opus_bitrate_kbps": 160,
+    "audio_normalization_enabled": true,
+    "audio_normalization_method": "loudnorm",
+    "audio_normalization_target": -18.0,
+    "audio_normalization_true_peak": -2.0,
+    "audio_normalization_lra": 11.0
+  }
+}
+```
+
 ### Backup management: how backup_suffix is used
 
 The backup manager uses your configuration to find persistent user backups created during transcoding, for both deletion and restoration.
@@ -111,11 +270,11 @@ Restore-specific behavior
 - What restore does: replaces the active transcoded video with the selected backup file
 - Safety backup: just before replacement, the current active video is saved alongside it with a .safety-[timestamp] suffix. Implementation: [backup_manager.restore_backup()](../backup_manager.py:231)
 
-Tip: To stop creating new persistent backups, set general.backup_original to false. Existing backups remain on disk until removed or restored via Tools → Manage Video Backups... (choose Delete Selected or Restore Selected in the selection dialog).
+Tip: To stop creating new persistent backups, set general.backup_original to false. Existing backups remain on disk until removed or restored via Tools → Manage Media Backups... (choose Delete Selected or Restore Selected in the selection dialog).
 
 ### Hardware acceleration behavior
 
-- Two global toggles govern all codecs: [config.GeneralConfig.hardware_encoding](../config.py:64) and [config.GeneralConfig.hardware_decode](../config.py:64)
+- Two global toggles govern all codecs: [config.GeneralConfig.hardware_encoding](../config.py:106) and [config.GeneralConfig.hardware_decode](../config.py:106)
 - When hardware encoding is enabled, the addon auto-selects the best available accelerator via [hwaccel.get_best_accelerator()](../hwaccel.py:79)
 - Currently supported accelerator: Intel QuickSync, implemented by [hwaccel.QuickSyncAccelerator](../hwaccel.py:121)
 - AV1 auto-selection: AV1 attempts QSV first; if unavailable, falls back to software encoders in order: libsvtav1 → libaom-av1. See [codecs.AV1Handler.build_encode_command()](../codecs.py:521)
@@ -256,7 +415,7 @@ The following shows all keys. Values reflect defaults unless noted.
     "backup_suffix": "-source",
     "timeout_seconds": 600,
     "verify_output": true,
-    "force_transcode": false,
+    "force_transcode_video": false,
     "min_free_space_mb": 500,
     "max_resolution": null,
     "max_fps": null,
@@ -275,7 +434,7 @@ Implementation details
  - Sync meta and #VIDEO updates are handled by [sync_meta_updater.update_sync_meta_video()](../sync_meta_updater.py:25)
 
 Batch transcoding
-- Use Tools → Batch Video Transcode to launch the dialog-driven workflow. The workflow is orchestrated by [batch_orchestrator.py](../batch_orchestrator.py) and presented through:
+- Use Tools → Batch Media Transcode to launch the dialog-driven workflow. The workflow is orchestrated by [batch_orchestrator.py](../batch_orchestrator.py) and presented through:
   - Preview and selection: [batch_preview_dialog.py](../batch_preview_dialog.py)
   - Real-time progress and abort: [batch_progress_dialog.py](../batch_progress_dialog.py)
   - Results reporting and export: [batch_results_dialog.py](../batch_results_dialog.py)

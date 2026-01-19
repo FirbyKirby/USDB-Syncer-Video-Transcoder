@@ -1,6 +1,11 @@
-# Video Transcoder Addon
+# Transcoder Addon
 
-Automatically converts downloaded videos in [USDB Syncer](https://github.com/bohning/usdb_syncer) to various formats. After each song download, the addon analyzes the video and, if needed, transcodes it to your target codec using your configuration settings (e.g., H.264 profile, pixel format).
+Automatically converts downloaded media in [USDB Syncer](https://github.com/bohning/usdb_syncer) to compatible **video and audio** formats.
+
+After each song download, the addon analyzes the downloaded files and, if needed:
+
+- transcodes the **video** referenced by SyncMeta
+- transcodes and/or normalizes the **standalone audio** referenced by SyncMeta (when present)
 
 Tip: Transcoding runs automatically. No manual steps needed after installation.
 
@@ -16,9 +21,16 @@ What it does
 - Transcodes videos to your configured target codec (and applies relevant codec settings and optional limits)
 - Supports five target codecs: H.264, HEVC, VP8, VP9, and AV1
 - Uses Intel QuickSync hardware encoding when available for much faster encodes
-- Copies audio when compatible with the target container; otherwise re-encodes to AAC (MP4/MOV) or Opus (WebM/MKV)
+- For video outputs: copies audio when compatible with the target container; otherwise re-encodes to AAC (MP4/MOV) or Opus (WebM/MKV)
+- For standalone audio outputs: transcodes audio to your configured audio codec (AAC/MP3/Vorbis/Opus)
+- Optional audio normalization:
+  - EBU R128 loudness normalization via FFmpeg `loudnorm` (two-pass)
+  - ReplayGain tagging via FFmpeg `replaygain` (when supported by the output format/player)
 - Updates USDB_Syncer metadata to avoid re-download loops and updates the song’s #VIDEO tag
-- Can batch-transcode synchronized videos from the GUI (Tools → Batch Video Transcode). See [docs/BATCH_TRANSCODING.md](docs/BATCH_TRANSCODING.md)
+- Updates USDB_Syncer metadata for both media types to avoid re-download loops, and updates song headers:
+  - `#VIDEO:` for video
+  - `#AUDIO:` and `#MP3:` for standalone audio
+- Can batch-transcode synchronized media from the GUI (Tools → Batch Media Transcode). See [docs/BATCH_TRANSCODING.md](docs/BATCH_TRANSCODING.md)
 
 Codec compatibility snapshot
 - H.264/AVC (MP4): Best compatibility
@@ -33,13 +45,13 @@ See also the architecture notes and compatibility table in [docs/ARCHITECTURE.md
 Prerequisites
 - FFMPEG and FFPROBE must be available. USDB_Syncer can use system PATH or a folder set in its settings. Verification guidance is in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-Steps
-1) Clone or download this repository from GitHub.
-2) Place or rename the folder as `video_transcoder` in your USDB_Syncer addons directory.
-   - Windows: %LocalAppData%/usdb_syncer/addons
-   - macOS: ~/Library/Application Support/usdb_syncer/addons
-   - Linux: ~/.local/share/usdb_syncer/addons
-3) Restart USDB_Syncer. The log will include: Video Transcoder addon loaded. Hook registration occurs in [__init__.py](__init__.py) and uses the USDB Syncer hooks system.
+ Steps
+ 1) Clone or download this repository from GitHub.
+ 2) Place or rename the folder as `transcoder` in your USDB_Syncer addons directory.
+    - Windows: %LocalAppData%/usdb_syncer/addons
+    - macOS: ~/Library/Application Support/usdb_syncer/addons
+    - Linux: ~/.local/share/usdb_syncer/addons
+ 3) Restart USDB_Syncer. The log will include: Transcoder addon loaded. Hook registration occurs in [__init__.py](__init__.py) and uses the USDB Syncer hooks system.
 
 ### Alternative installation: `.zip` addon (loaded directly)
 
@@ -60,24 +72,24 @@ Example layouts
 - Package addon:
   - `my_addon.zip` containing `my_addon/__init__.py` (and any other package files)
 
-For this repository, a typical zip install would be `video_transcoder.zip` containing `video_transcoder/__init__.py` and the rest of this addon’s Python files under the `video_transcoder/` directory.
+For this repository, a typical zip install would be `transcoder.zip` containing `transcoder/__init__.py` and the rest of this addon’s Python files under the `transcoder/` directory.
 
 After copying the zip into the addons directory, restart USDB_Syncer. You should see the same addon-loaded log message as with a folder install.
 
 ## Configuration
 
-The addon can be configured graphically via **Tools → Video Transcoder Settings** in USDB Syncer.
+The addon can be configured graphically via **Tools → Transcoder Settings** in USDB Syncer.
 
 The runtime configuration file is stored in the USDB Syncer data directory (outside the addon folder). This is required for `.zip`-based addon installs and ensures settings persist across addon upgrades.
 
 Runtime config file location (exact path varies by platform)
-- Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\video_transcoder_config.json`
-- macOS: `~/Library/Application Support/bohning/usdb_syncer/video_transcoder_config.json`
-- Linux: `~/.local/share/bohning/usdb_syncer/video_transcoder_config.json`
+- Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
+- macOS: `~/Library/Application Support/bohning/usdb_syncer/transcoder_config.json`
+- Linux: `~/.local/share/bohning/usdb_syncer/transcoder_config.json`
 
 Manual editing (advanced)
 1) Close USDB Syncer.
-2) Edit `video_transcoder_config.json` at the path above.
+2) Edit `transcoder_config.json` at the path above.
 3) Restart USDB Syncer.
 
 Note: The repository contains [config.json.example](config.json.example:1) as a template for reference. It is not the runtime config file that USDB Syncer reads.
@@ -88,27 +100,68 @@ Default config excerpt
   "version": 2,
   "auto_transcode_enabled": true,
   "target_codec": "h264",
+  "audio": {
+    "audio_transcode_enabled": true,
+    "force_transcode_audio": false,
+    "audio_codec": "aac",
+    "mp3_quality": 0,
+    "vorbis_quality": 10.0,
+    "aac_vbr_mode": 5,
+    "opus_bitrate_kbps": 160,
+    "audio_normalization_enabled": false,
+    "audio_normalization_method": "loudnorm",
+    "audio_normalization_target": -18.0,
+    "audio_normalization_true_peak": -2.0,
+    "audio_normalization_lra": 11.0
+  },
   "h264": { "profile": "high", "pixel_format": "yuv420p", "crf": 18, "preset": "fast", "container": "mp4" },
   "vp8": { "crf": 10, "cpu_used": 4, "container": "webm" },
   "hevc": { "profile": "main", "pixel_format": "yuv420p", "crf": 18, "preset": "faster", "container": "mp4" },
   "vp9": { "crf": 20, "cpu_used": 4, "deadline": "good", "container": "webm" },
   "av1": { "crf": 20, "cpu_used": 8, "container": "mkv" },
-  "general": { "hardware_encoding": true, "hardware_decode": true, "backup_original": true, "backup_suffix": "-source", "timeout_seconds": 600, "verify_output": true, "force_transcode": false, "min_free_space_mb": 500, "max_resolution": null, "max_fps": null, "max_bitrate_kbps": null },
+  "general": { "hardware_encoding": true, "hardware_decode": true, "backup_original": true, "backup_suffix": "-source", "timeout_seconds": 600, "verify_output": true, "force_transcode_video": false, "min_free_space_mb": 500, "max_resolution": null, "max_fps": null, "max_bitrate_kbps": null },
   "usdb_integration": { "use_usdb_resolution": true, "use_usdb_fps": true }
 }
 ```
 
 Important paths and behavior
-- Runtime config file location: USDB Syncer data directory `video_transcoder_config.json` (created on first run by [config.load_config()](config.py:109))
-  - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\video_transcoder_config.json`
-  - macOS: `~/Library/Application Support/bohning/usdb_syncer/video_transcoder_config.json`
-  - Linux: `~/.local/share/bohning/usdb_syncer/video_transcoder_config.json`
-- Backup originals: when enabled, originals are preserved as name-source.ext (see default [config.GeneralConfig](config.py:64))
+- Runtime config file location: USDB Syncer data directory `transcoder_config.json` (created on first run by [config.load_config()](config.py:157))
+  - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
+  - macOS: `~/Library/Application Support/bohning/usdb_syncer/transcoder_config.json`
+  - Linux: `~/.local/share/bohning/usdb_syncer/transcoder_config.json`
+- Backup originals: when enabled, originals are preserved as name-source.ext (see default [config.GeneralConfig](config.py:106))
 - Automatic run: executes after each download via the USDB Syncer hooks system
-- Force transcode: set [config.GeneralConfig.force_transcode](config.py:79) to true to force transcoding even if the input already matches the target codec and settings. Useful for testing or ensuring fresh encodes. Applies to both automatic and batch workflows
+- Force transcode (video): set [config.GeneralConfig.force_transcode_video](config.py:122) to true to force video transcoding even if the input already matches the target codec and settings. Useful for testing or ensuring fresh encodes. Applies to both automatic and batch workflows
+- Force transcode (audio): set [config.AudioConfig.force_transcode_audio](config.py:86) to force audio re-encoding even when codec/container already match (disables stream-copy optimization)
 - Optional limits: max_resolution/max_fps/max_bitrate_kbps are applied by codec handlers (see [codecs.py](codecs.py))
 - Optional USDB settings integration: use_usdb_resolution/use_usdb_fps can read values from USDB Syncer settings for display and per-file transcode operations (see [transcoder._apply_limits()](transcoder.py:474))
   - Batch note: batch candidate discovery uses your configured general.max_resolution/general.max_fps values directly. If you leave those as null, videos that only exceed USDB limits will not appear as batch candidates
+
+## Audio codec support (standalone audio)
+
+The addon can transcode standalone audio referenced by SyncMeta to these output codecs:
+
+- AAC (`aac`) — common default; typically written as `.m4a`
+- MP3 (`libmp3lame`) — widest compatibility; written as `.mp3`
+- Vorbis (`libvorbis`) — open format; written as `.ogg`
+- Opus (`libopus`) — very efficient; written as `.opus`
+
+Note: These codecs require a working FFmpeg build. Some builds omit certain encoders (see troubleshooting).
+
+## Audio normalization (standalone audio)
+
+When audio normalization is enabled, the addon adjusts perceived loudness so tracks play at a more consistent volume.
+
+Two methods are supported:
+
+- **EBU R128 loudnorm (two-pass)**: rewrites audio to a target integrated loudness (LUFS) and true-peak (dBTP)
+- **ReplayGain**: writes ReplayGain tags when supported by the output container and your player
+
+User-friendly terms
+
+- **LUFS**: a measurement of perceived loudness (more negative = quieter)
+- **EBU R128**: a standard for measuring/normalizing loudness
+- **True Peak (dBTP)**: a peak measurement that helps avoid clipping after normalization
 
 ## Transcoding decisions (what triggers a transcode)
 
@@ -151,7 +204,7 @@ What you need
 - FFMPEG build that includes QSV encoders/decoders (e.g., h264_qsv, hevc_qsv)
 
 How it behaves
-- Global-only controls: toggle [config.GeneralConfig.hardware_encoding](config.py:64) and [config.GeneralConfig.hardware_decode](config.py:64) to affect all codecs
+- Global-only controls: toggle [config.GeneralConfig.hardware_encoding](config.py:106) and [config.GeneralConfig.hardware_decode](config.py:106) to affect all codecs
 - Auto-selection: when hardware encoding is enabled, the addon selects the best available accelerator via [hwaccel.get_best_accelerator()](hwaccel.py:79)
 - Current support: Intel QuickSync only, implemented by [hwaccel.QuickSyncAccelerator](hwaccel.py:121). The architecture permits future accelerators
 - AV1 behavior: if targeting AV1 and hardware encoding is enabled, QSV is used when available; otherwise encoding falls back to software AV1 encoders (prefers libsvtav1, then libaom-av1). Encoder selection code path: [codecs.AV1Handler.build_encode_command()](codecs.py:521)
@@ -188,7 +241,7 @@ Warning: On macOS, QuickSync is not used by this addon. It will fall back to sof
 
 ## Batch Transcoding (existing library)
 
-Batch transcoding converts an existing library of synchronized videos to your configured target codec and limits.
+Batch transcoding converts an existing library of synchronized media (video + standalone audio) to your configured targets and limits.
 
 Key points
 - Preview + selection UI with filtering and live statistics
@@ -202,12 +255,14 @@ Rollback vs backups
 - Rollback protection creates temporary copies in a system temp folder for the current batch operation
 - Independent of rollback, the `backup_original` setting controls persistent backups stored next to your video files
 
-## Managing Video Backups (Tools → Manage Video Backups...)
+## Managing Backups (Tools → Manage Media Backups...)
 
-Use a single unified workflow to delete or restore backups from one place: scan → select → choose action (Delete or Restore) → confirm → execute → results. The selection dialog presents both options with two action buttons: Delete Selected and Restore Selected.
+Use a single unified workflow to delete or restore backups from one place: scan → select → choose action (Delete or Restore) → confirm → execute → results.
 
 How backups are discovered
-- The manager first looks for an exact stored filename in each song’s sync data: transcoder_source_fname
+  - The manager first looks for an exact stored filename in each song’s sync data:
+    - `transcoder_source_fname` (video)
+    - `transcoder_audio_source_fname` (audio)
   - If present and the file exists, it is treated as the backup
 - If not present, it searches for files next to the active video that match: <active_video_stem><backup_suffix>*
   - The backup_suffix is configured in [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and defaults to -source
@@ -215,7 +270,7 @@ How backups are discovered
   - Discovery and validation logic: [backup_manager.py](backup_manager.py)
   
   Access
-  - Tools → Manage Video Backups... → [backup_dialog_orchestrator.BackupDialogOrchestrator.start_workflow()](backup_dialog_orchestrator.py:93)
+  - Tools → Manage Media Backups... → [backup_dialog_orchestrator.BackupDialogOrchestrator.start_workflow()](backup_dialog_orchestrator.py:93)
   
   Unified phases
   1) Scan
@@ -252,7 +307,7 @@ Deletion safeguards (unchanged)
 
 Scope and limitations
 - Affects only persistent user backups created alongside your song files using the configured backup_suffix
-- Does not touch temporary rollback backups created by Batch Video Transcode; those live in a separate system temp folder managed by [rollback.py](rollback.py)
+- Does not touch temporary rollback backups created by Batch Media Transcode; those live in a separate system temp folder managed by [rollback.py](rollback.py)
 - Respects your current backup_suffix setting when searching by pattern; exact matches saved in sync data are honored even if you later change the suffix
 
 Tip: To reduce future backup accumulation, you can disable keeping new originals by setting general.backup_original to false in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). This does not affect existing backups; use the manager to remove or restore them.
@@ -282,14 +337,19 @@ Sync tracking (critical)
 
 - Does this run automatically? Yes. The addon subscribes to the USDB Syncer hooks system and processes each newly downloaded song.
 - Will my original file be kept? Yes, if general.backup_original is true. The original is renamed to name-source.ext.
-- Does it re-encode audio? Audio is copied when compatible with the target container; otherwise it is re-encoded to AAC (MP4/MOV) or Opus (WebM/MKV).
+- Does it re-encode audio inside videos? Sometimes. For video outputs, audio is copied when compatible with the target container; otherwise it is re-encoded (AAC for MP4/MOV, Opus for WebM/MKV).
+- Does it transcode standalone audio? Yes, when SyncMeta includes an audio file and audio transcoding is enabled in settings.
 - Which container will I get? Defaults are H.264 → .mp4, VP8/VP9 → .webm, HEVC → .mp4, AV1 → .mkv, but you can override per-codec container via the `container` config key.
-- Where is the config file? The runtime config is stored in the USDB Syncer data directory as `video_transcoder_config.json` (created on first run by [config.load_config()](config.py:110)).
-  - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\video_transcoder_config.json`
-  - macOS: `~/Library/Application Support/bohning/usdb_syncer/video_transcoder_config.json`
-  - Linux: `~/.local/share/bohning/usdb_syncer/video_transcoder_config.json`
+- Where is the config file? The runtime config is stored in the USDB Syncer data directory as `transcoder_config.json` (created on first run by [config.load_config()](config.py:157)).
+  - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
+  - macOS: `~/Library/Application Support/bohning/usdb_syncer/transcoder_config.json`
+  - Linux: `~/.local/share/bohning/usdb_syncer/transcoder_config.json`
 - How do I turn off automatic transcoding? Set auto_transcode_enabled to false in the config JSON. The hook still loads but exits early. Batch transcoding remains available via the Tools menu.
 - My videos still don’t play. Start with H.264, ensure yuv420p and CFR, and review [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+## Audio transcoding guide
+
+For a dedicated audio guide (codec selection, quality recommendations, and normalization), see [docs/AUDIO_TRANSCODING.md](docs/AUDIO_TRANSCODING.md).
 
 When does the addon skip transcoding?
 - Only when the input already matches your configured target codec and its checked settings, and does not exceed any configured limits (resolution, FPS, bitrate). For H.264, that includes profile/pixel_format; for HEVC, profile/pixel_format; for VP8/VP9/AV1, the codec must match.

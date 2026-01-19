@@ -14,7 +14,7 @@ from usdb_syncer.logger import song_logger
 from usdb_syncer.usdb_song import UsdbSong
 from usdb_syncer.utils import AppPaths
 
-from .transcoder import TranscodeResult, process_video
+from .transcoder import TranscodeResult, process_audio, process_video
 from .utils import is_aborted
 
 if TYPE_CHECKING:
@@ -77,7 +77,7 @@ class BatchAbortRegistry:
 class BatchWorker(QtCore.QThread):
     """Worker thread for batch transcoding."""
 
-    # Signals
+    # Signals (kept as "video_*" for backward compatibility; they now report media items)
     video_started = QtCore.Signal(str, str)  # title, artist
     video_progress = QtCore.Signal(float, float, str, float, float)  # percent, fps, speed, elapsed, eta
     video_completed = QtCore.Signal(int, object)  # index, TranscodeResult
@@ -148,14 +148,23 @@ class BatchWorker(QtCore.QThread):
                     def progress_callback(percent: float, fps: float, speed: str, elapsed: float, eta: float) -> None:
                         self.video_progress.emit(percent, fps, speed, elapsed, eta)
 
-                    # Perform the transcode
-                    result = process_video(
-                        song=song,
-                        video_path=candidate.video_path,
-                        cfg=self.cfg,
-                        slog=slog,
-                        progress_callback=progress_callback
-                    )
+                    # Perform the transcode (video or audio)
+                    if getattr(candidate, "media_type", "video") == "audio":
+                        result = process_audio(
+                            song=song,
+                            media_path=candidate.video_path,
+                            cfg=self.cfg,
+                            slog=slog,
+                            progress_callback=progress_callback,
+                        )
+                    else:
+                        result = process_video(
+                            song=song,
+                            video_path=candidate.video_path,
+                            cfg=self.cfg,
+                            slog=slog,
+                            progress_callback=progress_callback
+                        )
                     
                     candidate.actual_time_seconds = time.time() - start_time
                     candidate.result = result

@@ -1,11 +1,20 @@
-"""Codec handler registry and implementations for H.264, VP8, HEVC, VP9, and AV1."""
+"""Codec handler registries and implementations.
+
+This module currently contains:
+
+Video codecs
+- H.264, VP8, HEVC, VP9, AV1
+
+Audio codecs (Stage 2 expansion)
+- MP3, Vorbis, AAC, Opus
+"""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Type
+from typing import TYPE_CHECKING, Dict, Iterable, Tuple, Type
 
 if TYPE_CHECKING:
     from .config import TranscoderConfig
@@ -605,5 +614,296 @@ class AV1Handler(CodecHandler):
         if output_path.suffix.lower() in (".mp4", ".mov"):
             cmd.extend(["-movflags", "+faststart"])
 
+        cmd.append(str(output_path))
+        return cmd
+
+
+# ============================================================
+# Audio codec support (Stage 2)
+# ============================================================
+
+
+@dataclass
+class AudioCodecCapabilities:
+    """Describes an audio codec handler's capabilities."""
+
+    name: str  # e.g., "mp3", "aac"
+    display_name: str  # e.g., "MP3 (LAME)"
+    container: str  # Default container extension (no leading dot)
+    container_extensions: Tuple[str, ...]  # Allowed extensions (no leading dot)
+
+
+class AudioCodecHandler(ABC):
+    """Abstract base class for audio codec handlers.
+
+    Audio handlers build FFmpeg commands for:
+    - standalone audio inputs (e.g. .wav/.flac/.mp3)
+    - extracting/transcoding audio from video containers (e.g. .mp4 with audio stream)
+    """
+
+    @classmethod
+    @abstractmethod
+    def capabilities(cls) -> AudioCodecCapabilities:
+        """Return audio codec capabilities."""
+        ...
+
+    @classmethod
+    @abstractmethod
+    def build_encode_command(
+        cls,
+        input_path: Path,
+        output_path: Path,
+        cfg: "TranscoderConfig",
+        *,
+        stream_copy: bool = False,
+    ) -> list[str]:
+        """Build FFmpeg command for audio-only output.
+
+        Notes:
+        - Always uses `-vn` to ensure no video stream is written.
+        - Uses `-map 0:a:0?` to gracefully handle inputs without audio streams.
+        """
+        ...
+
+    @classmethod
+    def validate_config(cls, cfg: "TranscoderConfig") -> None:
+        """Validate relevant config for this codec.
+
+        Implementations should raise ValueError with a user-actionable message.
+        """
+        return
+
+    @classmethod
+    def is_container_compatible(cls, path: Path) -> bool:
+        """Return True if the file extension matches this codec's container."""
+        ext = path.suffix.lower().lstrip(".")
+        return ext in set(cls.capabilities().container_extensions)
+
+
+# Global audio codec registry
+AUDIO_CODEC_REGISTRY: Dict[str, Type[AudioCodecHandler]] = {}
+
+
+def register_audio_codec(handler: Type[AudioCodecHandler]) -> Type[AudioCodecHandler]:
+    """Decorator to register an audio codec handler."""
+    caps = handler.capabilities()
+    AUDIO_CODEC_REGISTRY[caps.name] = handler
+    return handler
+
+
+def get_audio_codec_handler(codec_name: str) -> Type[AudioCodecHandler] | None:
+    """Get audio codec handler for a codec by name."""
+    return AUDIO_CODEC_REGISTRY.get(codec_name)
+
+
+def _ensure_int_in_range(name: str, value: int, low: int, high: int) -> None:
+    if value < low or value > high:
+        raise ValueError(f"{name} must be between {low} and {high} (got {value})")
+
+
+def _ensure_float_in_range(name: str, value: float, low: float, high: float) -> None:
+    if value < low or value > high:
+        raise ValueError(f"{name} must be between {low} and {high} (got {value})")
+
+
+def _audio_common_prefix(input_path: Path) -> list[str]:
+    """Return common FFmpeg arguments for audio-only outputs."""
+    # `-map 0:a:0?` selects the first audio stream if present, and avoids a hard
+    # error for containers without audio (ffmpeg will fail later on encoding).
+    return [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i",
+        str(input_path),
+        "-map",
+        "0:a:0?",
+        "-vn",
+        "-sn",
+        "-dn",
+    ]
+
+
+def _audio_force_extension(path: Path, extensions: Iterable[str]) -> None:
+    """Validate output extension against supported container extensions."""
+    ext = path.suffix.lower().lstrip(".")
+    if ext not in set(extensions):
+        raise ValueError(f"Unsupported output extension '.{ext}' for audio codec")
+
+
+@register_audio_codec
+class MP3AudioHandler(AudioCodecHandler):
+    """Handler for MP3 (LAME) encoding."""
+
+    @classmethod
+    def capabilities(cls) -> AudioCodecCapabilities:
+        return AudioCodecCapabilities(
+            name="mp3",
+            display_name="MP3 (LAME)",
+            container="mp3",
+            container_extensions=("mp3",),
+        )
+
+    @classmethod
+    def validate_config(cls, cfg: "TranscoderConfig") -> None:
+        _ensure_int_in_range("mp3_quality", int(cfg.audio.mp3_quality), 0, 9)
+
+    @classmethod
+    def build_encode_command(
+        cls,
+        input_path: Path,
+        output_path: Path,
+        cfg: "TranscoderConfig",
+        *,
+        stream_copy: bool = False,
+    ) -> list[str]:
+        cls.validate_config(cfg)
+        _audio_force_extension(output_path, cls.capabilities().container_extensions)
+
+        cmd = _audio_common_prefix(input_path)
+        if stream_copy:
+            cmd.extend(["-c:a", "copy"])
+        else:
+            cmd.extend([
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                str(int(cfg.audio.mp3_quality)),
+            ])
+        cmd.append(str(output_path))
+        return cmd
+
+
+@register_audio_codec
+class VorbisAudioHandler(AudioCodecHandler):
+    """Handler for Ogg Vorbis encoding."""
+
+    @classmethod
+    def capabilities(cls) -> AudioCodecCapabilities:
+        return AudioCodecCapabilities(
+            name="vorbis",
+            display_name="Ogg Vorbis",
+            container="ogg",
+            container_extensions=("ogg",),
+        )
+
+    @classmethod
+    def validate_config(cls, cfg: "TranscoderConfig") -> None:
+        _ensure_float_in_range("vorbis_quality", float(cfg.audio.vorbis_quality), -1.0, 10.0)
+
+    @classmethod
+    def build_encode_command(
+        cls,
+        input_path: Path,
+        output_path: Path,
+        cfg: "TranscoderConfig",
+        *,
+        stream_copy: bool = False,
+    ) -> list[str]:
+        cls.validate_config(cfg)
+        _audio_force_extension(output_path, cls.capabilities().container_extensions)
+
+        cmd = _audio_common_prefix(input_path)
+        if stream_copy:
+            cmd.extend(["-c:a", "copy"])
+        else:
+            cmd.extend([
+                "-c:a",
+                "libvorbis",
+                "-q:a",
+                str(float(cfg.audio.vorbis_quality)),
+            ])
+        cmd.append(str(output_path))
+        return cmd
+
+
+@register_audio_codec
+class AACAudioHandler(AudioCodecHandler):
+    """Handler for AAC (native `aac`) encoding in an M4A container."""
+
+    @classmethod
+    def capabilities(cls) -> AudioCodecCapabilities:
+        return AudioCodecCapabilities(
+            name="aac",
+            display_name="AAC (M4A)",
+            container="m4a",
+            # Accept mp4 as compatible container for AAC stream-copy operations.
+            container_extensions=("m4a", "mp4"),
+        )
+
+    @classmethod
+    def validate_config(cls, cfg: "TranscoderConfig") -> None:
+        _ensure_int_in_range("aac_vbr_mode", int(cfg.audio.aac_vbr_mode), 1, 5)
+
+    @classmethod
+    def build_encode_command(
+        cls,
+        input_path: Path,
+        output_path: Path,
+        cfg: "TranscoderConfig",
+        *,
+        stream_copy: bool = False,
+    ) -> list[str]:
+        cls.validate_config(cfg)
+        _audio_force_extension(output_path, ("m4a", "mp4"))
+
+        cmd = _audio_common_prefix(input_path)
+        if stream_copy:
+            cmd.extend(["-c:a", "copy"])
+        else:
+            cmd.extend([
+                "-c:a",
+                "aac",
+                "-vbr",
+                str(int(cfg.audio.aac_vbr_mode)),
+            ])
+
+        # MP4-family containers: enable faststart.
+        if output_path.suffix.lower() in (".m4a", ".mp4", ".mov"):
+            cmd.extend(["-movflags", "+faststart"])
+
+        cmd.append(str(output_path))
+        return cmd
+
+
+@register_audio_codec
+class OpusAudioHandler(AudioCodecHandler):
+    """Handler for Opus (`libopus`) encoding in an Ogg Opus container."""
+
+    @classmethod
+    def capabilities(cls) -> AudioCodecCapabilities:
+        return AudioCodecCapabilities(
+            name="opus",
+            display_name="Opus",
+            container="opus",
+            container_extensions=("opus",),
+        )
+
+    @classmethod
+    def validate_config(cls, cfg: "TranscoderConfig") -> None:
+        _ensure_int_in_range("opus_bitrate_kbps", int(cfg.audio.opus_bitrate_kbps), 6, 510)
+
+    @classmethod
+    def build_encode_command(
+        cls,
+        input_path: Path,
+        output_path: Path,
+        cfg: "TranscoderConfig",
+        *,
+        stream_copy: bool = False,
+    ) -> list[str]:
+        cls.validate_config(cfg)
+        _audio_force_extension(output_path, cls.capabilities().container_extensions)
+
+        cmd = _audio_common_prefix(input_path)
+        if stream_copy:
+            cmd.extend(["-c:a", "copy"])
+        else:
+            cmd.extend([
+                "-c:a",
+                "libopus",
+                "-b:a",
+                f"{int(cfg.audio.opus_bitrate_kbps)}k",
+            ])
         cmd.append(str(output_path))
         return cmd

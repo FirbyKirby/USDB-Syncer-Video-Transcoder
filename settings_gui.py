@@ -1,4 +1,4 @@
-"""GUI settings dialog for the Video Transcoder addon."""
+"""GUI settings dialog for the Transcoder addon."""
 
 from __future__ import annotations
 
@@ -8,12 +8,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -40,21 +42,27 @@ class TranscoderSettingsDialog(QDialog):
         self._load_settings()
 
     def _setup_ui(self) -> None:
-        self.setWindowTitle("Video Transcoder Settings")
+        self.setWindowTitle("Transcoder Settings")
         self.setWindowIcon(icons.Icon.VIDEO.icon())
         self.setMinimumWidth(800)
         self.setMinimumHeight(650)
         
         main_layout = QVBoxLayout(self)
-        
+
+        # Scrollable content area (dialog is dense once audio settings are added)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        main_layout.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        content_layout = QHBoxLayout(content)
+
         # Two-column layout
-        columns_layout = QHBoxLayout()
-        main_layout.addLayout(columns_layout)
-        
         left_column = QVBoxLayout()
         right_column = QVBoxLayout()
-        columns_layout.addLayout(left_column)
-        columns_layout.addLayout(right_column)
+        content_layout.addLayout(left_column)
+        content_layout.addLayout(right_column)
 
         # 1. General Settings
         gen_group = QGroupBox("General Settings")
@@ -95,9 +103,9 @@ class TranscoderSettingsDialog(QDialog):
             "Adds a small delay after each transcode."
         )
 
-        self.force_transcode = QCheckBox("Force Transcode")
+        self.force_transcode = QCheckBox("Force Transcode Video")
         self.force_transcode.setToolTip(
-            "<b>Force Transcode</b><br/>"
+            "<b>Force Video Transcode</b><br/>"
             "Force transcoding even if the video already matches the target format.<br/>"
             "Useful for applying new quality settings or fixing corrupted files."
         )
@@ -253,6 +261,147 @@ class TranscoderSettingsDialog(QDialog):
         codec_layout.addWidget(self.codec_stack)
         
         right_column.addWidget(codec_group)
+
+        # 5. Audio Transcoding (Right Column)
+        audio_group = QGroupBox("Audio Transcoding")
+        audio_layout = QVBoxLayout(audio_group)
+
+        # Enable toggle
+        self.audio_transcode_enabled = QCheckBox("Enable audio transcoding")
+        self.audio_transcode_enabled.setToolTip(
+            "<b>Enable Audio Transcoding</b><br/>"
+            "When enabled, the addon will process standalone audio files referenced by SyncMeta after download.<br/>"
+            "When disabled, audio files are left as-downloaded."  # Keep concise
+        )
+        audio_layout.addWidget(self.audio_transcode_enabled)
+
+        # Container for all audio options (so we can gray it out when disabled)
+        self.audio_options_container = QWidget()
+        audio_options_layout = QVBoxLayout(self.audio_options_container)
+        audio_options_layout.setContentsMargins(0, 0, 0, 0)
+        audio_layout.addWidget(self.audio_options_container)
+
+        # Force audio transcode
+        self.force_transcode_audio = QCheckBox("Force audio transcode")
+        self.force_transcode_audio.setToolTip(
+            "<b>Force Audio Transcode</b><br/>"
+            "Force re-transcode audio even if format matches.<br/>"
+            "Disables stream-copy optimization."
+        )
+        audio_options_layout.addWidget(self.force_transcode_audio)
+
+        # Target codec selector
+        audio_target_form = QFormLayout()
+        self.audio_codec = QComboBox()
+        self.audio_codec.addItem("AAC", "aac")
+        self.audio_codec.addItem("MP3", "mp3")
+        self.audio_codec.addItem("Vorbis", "vorbis")
+        self.audio_codec.addItem("Opus", "opus")
+        self.audio_codec.setToolTip(
+            "<b>Target Audio Codec</b><br/>"
+            "Select the output audio codec and container.<br/>"
+            "Codec-specific quality settings will appear below."
+        )
+        audio_target_form.addRow("Target Codec:", self.audio_codec)
+        audio_options_layout.addLayout(audio_target_form)
+
+        # Stacked widget for codec-specific quality settings
+        self.audio_codec_stack = QStackedWidget()
+        self.audio_codec_stack.addWidget(self._create_aac_audio_settings())
+        self.audio_codec_stack.addWidget(self._create_mp3_audio_settings())
+        self.audio_codec_stack.addWidget(self._create_vorbis_audio_settings())
+        self.audio_codec_stack.addWidget(self._create_opus_audio_settings())
+        self.audio_codec_stack.setMinimumHeight(140)
+        audio_options_layout.addWidget(self.audio_codec_stack)
+
+        # Normalization
+        norm_group = QGroupBox("Audio Normalization")
+        norm_layout = QVBoxLayout(norm_group)
+
+        self.audio_normalization_enabled = QCheckBox("Enable audio normalization")
+        self.audio_normalization_enabled.setToolTip(
+            "<b>Enable Audio Normalization</b><br/>"
+            "Adjust perceived loudness to a consistent level during transcoding.<br/>"
+            "<br/>"
+            "<b>Note:</b> Normalization requires re-encoding (stream copy is disabled)."
+        )
+        norm_layout.addWidget(self.audio_normalization_enabled)
+
+        self.audio_normalization_container = QWidget()
+        norm_form = QFormLayout(self.audio_normalization_container)
+
+        self.audio_normalization_method = QComboBox()
+        self.audio_normalization_method.addItem("EBU R128 (loudnorm)", "loudnorm")
+        self.audio_normalization_method.addItem("ReplayGain", "replaygain")
+        self.audio_normalization_method.setToolTip(
+            "<b>Normalization Method</b><br/>"
+            "Choose how normalization is applied.<br/>"
+            "• <b>EBU R128 (loudnorm):</b> Rewrites audio to a loudness target.<br/>"
+            "• <b>ReplayGain:</b> Writes ReplayGain tags when supported by the container/player."
+        )
+
+        self.audio_normalization_target = QDoubleSpinBox()
+        self.audio_normalization_target.setDecimals(1)
+        self.audio_normalization_target.setRange(-30.0, 0.0)
+        self.audio_normalization_target.setSingleStep(0.5)
+        self.audio_normalization_target.setSuffix(" LUFS")
+        self.audio_normalization_target.setToolTip(
+            "<b>Target Integrated Loudness (LUFS)</b><br/>"
+            "Target perceived loudness for the track.<br/>"
+            "More negative values are quieter.<br/>"
+            "<br/>"
+            "<b>Recommended:</b> -18.0 LUFS (typical music/karaoke target)"
+        )
+
+        norm_form.addRow("Method:", self.audio_normalization_method)
+        norm_form.addRow("Target integrated loudness:", self.audio_normalization_target)
+
+        # Advanced normalization parameters (toggle visibility)
+        self.audio_norm_show_advanced = QCheckBox("Show advanced settings")
+        self.audio_norm_show_advanced.setToolTip(
+            "<b>Advanced Normalization Settings</b><br/>"
+            "Reveal additional loudnorm parameters (true peak and loudness range)."
+        )
+        norm_layout.addWidget(self.audio_norm_show_advanced)
+
+        self.audio_norm_advanced_container = QWidget()
+        adv_form = QFormLayout(self.audio_norm_advanced_container)
+
+        self.audio_normalization_true_peak = QDoubleSpinBox()
+        self.audio_normalization_true_peak.setDecimals(1)
+        self.audio_normalization_true_peak.setRange(-10.0, 0.0)
+        self.audio_normalization_true_peak.setSingleStep(0.5)
+        self.audio_normalization_true_peak.setSuffix(" dBTP")
+        self.audio_normalization_true_peak.setToolTip(
+            "<b>True Peak Target (dBTP)</b><br/>"
+            "Maximum allowed true-peak level after normalization.<br/>"
+            "Helps prevent clipping during playback.<br/>"
+            "<br/>"
+            "<b>Recommended:</b> -2.0 dBTP"
+        )
+
+        self.audio_normalization_lra = QDoubleSpinBox()
+        self.audio_normalization_lra.setDecimals(1)
+        self.audio_normalization_lra.setRange(1.0, 20.0)
+        self.audio_normalization_lra.setSingleStep(0.5)
+        self.audio_normalization_lra.setSuffix(" LU")
+        self.audio_normalization_lra.setToolTip(
+            "<b>Loudness Range Target (LU)</b><br/>"
+            "Controls the desired loudness range for the loudnorm filter.<br/>"
+            "Higher values preserve more dynamics; lower values can reduce dynamics.<br/>"
+            "<br/>"
+            "<b>Recommended:</b> 11.0 LU"
+        )
+
+        adv_form.addRow("True peak target:", self.audio_normalization_true_peak)
+        adv_form.addRow("Loudness range target:", self.audio_normalization_lra)
+
+        norm_layout.addWidget(self.audio_normalization_container)
+        norm_layout.addWidget(self.audio_norm_advanced_container)
+
+        audio_options_layout.addWidget(norm_group)
+
+        right_column.addWidget(audio_group)
         right_column.addStretch()
 
         # Buttons
@@ -271,6 +420,14 @@ class TranscoderSettingsDialog(QDialog):
         self.use_usdb_res.stateChanged.connect(self._toggle_manual_resolution)
         self.use_usdb_fps.stateChanged.connect(self._toggle_manual_fps)
         self.backup.stateChanged.connect(self._toggle_backup_suffix)
+
+        self.audio_codec.currentIndexChanged.connect(self.audio_codec_stack.setCurrentIndex)
+        self.audio_transcode_enabled.stateChanged.connect(self._toggle_audio_options_enabled)
+        self.audio_normalization_enabled.stateChanged.connect(self._toggle_audio_normalization_enabled)
+        self.audio_norm_show_advanced.stateChanged.connect(self._toggle_audio_advanced_normalization)
+
+        # Initial visibility
+        self._toggle_audio_advanced_normalization(Qt.CheckState.Unchecked.value)
 
     def _create_h264_settings(self) -> QWidget:
         widget = QWidget()
@@ -534,6 +691,74 @@ class TranscoderSettingsDialog(QDialog):
         
         return widget
 
+    def _create_mp3_audio_settings(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.mp3_quality = QSpinBox()
+        self.mp3_quality.setRange(0, 9)
+        self.mp3_quality.setToolTip(
+            "<b>MP3 VBR Quality</b><br/>"
+            "LAME VBR quality (0 = highest quality, 9 = smallest size). "
+            "Lower values produce better sound at larger file sizes.<br/>"
+            "<br/>"
+            "<b>Recommended:</b> 0-2 for transparent quality."
+        )
+        layout.addRow("VBR quality:", self.mp3_quality)
+        return widget
+
+    def _create_vorbis_audio_settings(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.vorbis_quality = QDoubleSpinBox()
+        self.vorbis_quality.setDecimals(1)
+        self.vorbis_quality.setRange(-1.0, 10.0)
+        self.vorbis_quality.setSingleStep(0.5)
+        self.vorbis_quality.setToolTip(
+            "<b>Vorbis Quality</b><br/>"
+            "Vorbis quality scale. Higher values produce better sound. "
+            "10.0 provides transparent quality for most audio.<br/>"
+            "<br/>"
+            "<b>Recommended:</b> 8.0-10.0."
+        )
+        layout.addRow("Quality:", self.vorbis_quality)
+        return widget
+
+    def _create_aac_audio_settings(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.aac_vbr_mode = QSpinBox()
+        self.aac_vbr_mode.setRange(1, 5)
+        self.aac_vbr_mode.setToolTip(
+            "<b>AAC VBR Mode</b><br/>"
+            "AAC VBR mode (1 = lower quality/smaller, 5 = higher quality/larger).<br/>"
+            "Mode 5 provides excellent quality for most use cases."
+        )
+        layout.addRow("VBR mode:", self.aac_vbr_mode)
+        return widget
+
+    def _create_opus_audio_settings(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.opus_bitrate_kbps = QSpinBox()
+        self.opus_bitrate_kbps.setRange(6, 510)
+        self.opus_bitrate_kbps.setSuffix(" kbps")
+        self.opus_bitrate_kbps.setToolTip(
+            "<b>Opus Bitrate</b><br/>"
+            "Opus bitrate in kbps. 96-128 kbps is good for most music, "
+            "160 kbps provides very high quality.<br/>"
+            "Opus is very efficient at all bitrates."
+        )
+        layout.addRow("Bitrate:", self.opus_bitrate_kbps)
+        return widget
+
     def _toggle_manual_resolution(self, state: int) -> None:
         visible = state == Qt.CheckState.Unchecked.value
         self.manual_res.setVisible(visible)
@@ -549,6 +774,29 @@ class TranscoderSettingsDialog(QDialog):
         self.backup_suffix.setVisible(visible)
         self.backup_suffix_label.setVisible(visible)
 
+    def _toggle_audio_options_enabled(self, state: int) -> None:
+        enabled = state == Qt.CheckState.Checked.value
+        self.audio_options_container.setEnabled(enabled)
+
+    def _toggle_audio_normalization_enabled(self, state: int) -> None:
+        enabled = state == Qt.CheckState.Checked.value
+        self.audio_normalization_container.setEnabled(enabled)
+        self.audio_norm_show_advanced.setEnabled(enabled)
+        self.audio_norm_advanced_container.setEnabled(enabled)
+
+    def _toggle_audio_advanced_normalization(self, state: int) -> None:
+        visible = state == Qt.CheckState.Checked.value
+        self.audio_norm_advanced_container.setVisible(visible)
+
+    def accept(self) -> None:
+        """Validate user inputs before closing."""
+        # All fields are constrained by spinbox ranges; these checks are defensive.
+        method = self.audio_normalization_method.currentData()
+        if method not in ("loudnorm", "replaygain"):
+            QMessageBox.critical(self, "Invalid Settings", "Audio normalization method is invalid.")
+            return
+        super().accept()
+
     def _load_settings(self) -> None:
         self.auto_transcode_enabled.setChecked(self.cfg.auto_transcode_enabled)
         
@@ -558,7 +806,7 @@ class TranscoderSettingsDialog(QDialog):
         self.backup.setChecked(self.cfg.general.backup_original)
         self.backup_suffix.setText(self.cfg.general.backup_suffix)
         self.verify.setChecked(self.cfg.general.verify_output)
-        self.force_transcode.setChecked(self.cfg.general.force_transcode)
+        self.force_transcode.setChecked(self.cfg.general.force_transcode_video)
         self.max_bitrate.setValue(self.cfg.general.max_bitrate_kbps or 0)
         self.timeout.setValue(self.cfg.general.timeout_seconds)
         self.min_space.setValue(self.cfg.general.min_free_space_mb)
@@ -629,6 +877,42 @@ class TranscoderSettingsDialog(QDialog):
         self.av1_cpu_used.setValue(self.cfg.av1.cpu_used)
         self.av1_container.setCurrentText(self.cfg.av1.container)
 
+        # Audio (enable + target codec)
+        self.audio_transcode_enabled.setChecked(self.cfg.audio.audio_transcode_enabled)
+        # Select by userData
+        for i in range(self.audio_codec.count()):
+            if self.audio_codec.itemData(i) == self.cfg.audio.audio_codec:
+                self.audio_codec.setCurrentIndex(i)
+                break
+        self.audio_codec_stack.setCurrentIndex(self.audio_codec.currentIndex())
+
+        # Audio codec-specific quality
+        self.mp3_quality.setValue(int(self.cfg.audio.mp3_quality))
+        self.vorbis_quality.setValue(float(self.cfg.audio.vorbis_quality))
+        self.aac_vbr_mode.setValue(int(self.cfg.audio.aac_vbr_mode))
+        self.opus_bitrate_kbps.setValue(int(self.cfg.audio.opus_bitrate_kbps))
+
+        # Audio normalization
+        self.audio_normalization_enabled.setChecked(bool(self.cfg.audio.audio_normalization_enabled))
+        for i in range(self.audio_normalization_method.count()):
+            if self.audio_normalization_method.itemData(i) == self.cfg.audio.audio_normalization_method:
+                self.audio_normalization_method.setCurrentIndex(i)
+                break
+        self.audio_normalization_target.setValue(float(self.cfg.audio.audio_normalization_target))
+        self.audio_normalization_true_peak.setValue(float(self.cfg.audio.audio_normalization_true_peak))
+        self.audio_normalization_lra.setValue(float(self.cfg.audio.audio_normalization_lra))
+
+        # Trigger enable/disable updates
+        self._toggle_audio_options_enabled(
+            Qt.CheckState.Checked.value if self.audio_transcode_enabled.isChecked() else Qt.CheckState.Unchecked.value
+        )
+        self._toggle_audio_normalization_enabled(
+            Qt.CheckState.Checked.value if self.audio_normalization_enabled.isChecked() else Qt.CheckState.Unchecked.value
+        )
+
+        # Force audio transcode
+        self.force_transcode_audio.setChecked(bool(getattr(self.cfg.audio, "force_transcode_audio", False)))
+
     def save_settings(self) -> None:
         self.cfg.auto_transcode_enabled = self.auto_transcode_enabled.isChecked()
         
@@ -638,7 +922,7 @@ class TranscoderSettingsDialog(QDialog):
         self.cfg.general.backup_original = self.backup.isChecked()
         self.cfg.general.backup_suffix = self.backup_suffix.text()
         self.cfg.general.verify_output = self.verify.isChecked()
-        self.cfg.general.force_transcode = self.force_transcode.isChecked()
+        self.cfg.general.force_transcode_video = self.force_transcode.isChecked()
         self.cfg.general.max_bitrate_kbps = self.max_bitrate.value() or None
         self.cfg.general.timeout_seconds = self.timeout.value()
         self.cfg.general.min_free_space_mb = self.min_space.value()
@@ -704,6 +988,21 @@ class TranscoderSettingsDialog(QDialog):
         self.cfg.av1.crf = self.av1_crf.value()
         self.cfg.av1.cpu_used = self.av1_cpu_used.value()
         self.cfg.av1.container = self.av1_container.currentText()
+
+        # Audio
+        self.cfg.audio.audio_transcode_enabled = self.audio_transcode_enabled.isChecked()
+        self.cfg.audio.force_transcode_audio = self.force_transcode_audio.isChecked()
+        self.cfg.audio.audio_codec = self.audio_codec.currentData()  # type: ignore
+        self.cfg.audio.mp3_quality = int(self.mp3_quality.value())
+        self.cfg.audio.vorbis_quality = float(self.vorbis_quality.value())
+        self.cfg.audio.aac_vbr_mode = int(self.aac_vbr_mode.value())
+        self.cfg.audio.opus_bitrate_kbps = int(self.opus_bitrate_kbps.value())
+
+        self.cfg.audio.audio_normalization_enabled = self.audio_normalization_enabled.isChecked()
+        self.cfg.audio.audio_normalization_method = self.audio_normalization_method.currentData()  # type: ignore
+        self.cfg.audio.audio_normalization_target = float(self.audio_normalization_target.value())
+        self.cfg.audio.audio_normalization_true_peak = float(self.audio_normalization_true_peak.value())
+        self.cfg.audio.audio_normalization_lra = float(self.audio_normalization_lra.value())
         
         config.save_config(self.cfg)
 
