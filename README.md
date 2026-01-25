@@ -7,7 +7,7 @@ After each song download, the addon analyzes the downloaded files and, if needed
 - transcodes the **video** referenced by SyncMeta
 - transcodes and/or normalizes the **standalone audio** referenced by SyncMeta (when present)
 
-Tip: Transcoding runs automatically. No manual steps needed after installation.
+Tip: Once enabled, transcoding can run automatically after each download. No manual steps are needed after installation.
 
 > **Hardware Encoding Limitations**
 > When QuickSync hardware encoding is used, certain settings (like `pixel_format`) are constrained to hardware-supported formats (currently NV12). Software encoding respects all configured parameters.
@@ -26,15 +26,16 @@ What it does
 - Optional audio normalization:
   - EBU R128 loudness normalization via FFmpeg `loudnorm` (two-pass)
   - ReplayGain tagging via FFmpeg `replaygain` (when supported by the output format/player)
-- Optional **normalization verification** (standalone audio)
-  - Measures loudness before transcoding and skips already-correct files (within tolerance)
+  - Optional **normalization verification** (standalone audio)
+  - Verifies normalization even when a codec/container transcode is required (for example, AAC/M4A → Vorbis/OGG)
+  - Uses cached results to avoid re-running analysis
+  - Can skip normalization work (and sometimes skip transcoding entirely) when audio is already within tolerance
   - Can save time and reduce unnecessary re-encoding
 - Updates USDB_Syncer metadata to avoid re-download loops and updates the song’s #VIDEO tag
 - Updates USDB_Syncer metadata for both media types to avoid re-download loops, and updates song headers:
   - `#VIDEO:` for video
   - `#AUDIO:` and `#MP3:` for standalone audio
-- Can batch-transcode synchronized media from the GUI (Tools → Batch Media Transcode). See [docs/BATCH_TRANSCODING.md](docs/BATCH_TRANSCODING.md)
- - Can batch-transcode synchronized media from the GUI (Tools → Batch Media Transcode) using either the **batch wizard** or **legacy batch** flow. See [docs/BATCH_TRANSCODING.md](docs/BATCH_TRANSCODING.md)
+- Can batch-transcode synchronized media from the GUI (Tools → Batch Media Transcode) using either the **batch wizard** or **legacy batch** flow. See [docs/BATCH_TRANSCODING.md](docs/BATCH_TRANSCODING.md)
 
 Codec compatibility snapshot
 - H.264/AVC (MP4): Best compatibility
@@ -55,7 +56,7 @@ Prerequisites
     - Windows: %LocalAppData%/usdb_syncer/addons
     - macOS: ~/Library/Application Support/usdb_syncer/addons
     - Linux: ~/.local/share/usdb_syncer/addons
- 3) Restart USDB_Syncer. The log will include: Transcoder addon loaded. Hook registration occurs in [__init__.py](__init__.py) and uses the USDB Syncer hooks system.
+ 3) Restart USDB_Syncer. The log will include: Transcoder addon loaded. Hook registration occurs in [`__init__.py`](__init__.py) and uses the USDB Syncer hooks system.
 
 ### Alternative installation: `.zip` addon (loaded directly)
 
@@ -82,7 +83,7 @@ After copying the zip into the addons directory, restart USDB_Syncer. You should
 
 ## Configuration
 
-The addon can be configured graphically via **Tools → Transcoder Settings** in USDB Syncer.
+The addon can be configured graphically via **Tools → Media Transcoder Settings** in USDB Syncer.
 
 The runtime configuration file is stored in the USDB Syncer data directory (outside the addon folder). This is required for `.zip`-based addon installs and ensures settings persist across addon upgrades.
 
@@ -102,10 +103,10 @@ Default config excerpt
 ```json
 {
   "version": 2,
-  "auto_transcode_enabled": true,
+  "auto_transcode_enabled": false,
   "target_codec": "h264",
   "audio": {
-    "audio_transcode_enabled": true,
+    "audio_transcode_enabled": false,
     "force_transcode_audio": false,
     "audio_codec": "aac",
     "mp3_quality": 0,
@@ -114,6 +115,7 @@ Default config excerpt
     "opus_bitrate_kbps": 160,
     "audio_normalization_enabled": false,
     "audio_normalization_method": "loudnorm",
+    "audio_normalization_use_usdb_defaults": true,
     "audio_normalization_target": -18.0,
     "audio_normalization_true_peak": -2.0,
     "audio_normalization_lra": 11.0
@@ -123,22 +125,23 @@ Default config excerpt
   "hevc": { "profile": "main", "pixel_format": "yuv420p", "crf": 18, "preset": "faster", "container": "mp4" },
   "vp9": { "crf": 20, "cpu_used": 4, "deadline": "good", "container": "webm" },
   "av1": { "crf": 20, "cpu_used": 8, "container": "mkv" },
-  "general": { "hardware_encoding": true, "hardware_decode": true, "backup_original": true, "backup_suffix": "-source", "timeout_seconds": 600, "verify_output": true, "force_transcode_video": false, "min_free_space_mb": 500, "max_resolution": null, "max_fps": null, "max_bitrate_kbps": null },
-  "usdb_integration": { "use_usdb_resolution": true, "use_usdb_fps": true }
+  "general": { "hardware_encoding": true, "hardware_decode": true, "backup_original": true, "backup_suffix": "-source", "timeout_seconds": 600, "verify_output": true, "min_free_space_mb": 500, "force_transcode_video": false, "max_resolution": null, "max_fps": null, "max_bitrate_kbps": null },
+  "usdb_integration": { "use_usdb_resolution": true, "use_usdb_fps": true },
+  "verification": { "enabled": false, "tolerance_preset": "balanced", "custom_i_tolerance": null, "custom_tp_tolerance": null, "custom_lra_tolerance": null }
 }
 ```
 
 Important paths and behavior
-- Runtime config file location: USDB Syncer data directory `transcoder_config.json` (created on first run by [config.load_config()](config.py:157))
+- Runtime config file location: USDB Syncer data directory `transcoder_config.json` (created on first run by [`core.config.load_config()`](core/config.py:204))
   - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
   - macOS: `~/Library/Application Support/bohning/usdb_syncer/transcoder_config.json`
   - Linux: `~/.local/share/bohning/usdb_syncer/transcoder_config.json`
-- Backup originals: when enabled, originals are preserved as name-source.ext (see default [config.GeneralConfig](config.py:106))
+- Backup originals: when enabled, originals are preserved as name-source.ext (see default [`core.config.GeneralConfig`](core/config.py:153))
 - Automatic run: executes after each download via the USDB Syncer hooks system
-- Force transcode (video): set [config.GeneralConfig.force_transcode_video](config.py:122) to true to force video transcoding even if the input already matches the target codec and settings. Useful for testing or ensuring fresh encodes. Applies to both automatic and batch workflows
-- Force transcode (audio): set [config.AudioConfig.force_transcode_audio](config.py:86) to force audio re-encoding even when codec/container already match (disables stream-copy optimization)
-- Optional limits: max_resolution/max_fps/max_bitrate_kbps are applied by codec handlers (see [codecs.py](codecs.py))
-- Optional USDB settings integration: use_usdb_resolution/use_usdb_fps can read values from USDB Syncer settings for display and per-file transcode operations (see [transcoder._apply_limits()](transcoder.py:474))
+- Force transcode (video): set `general.force_transcode_video` to true to force video transcoding even if the input already matches the target codec and settings. Useful for testing or ensuring fresh encodes. Applies to both automatic and batch workflows
+- Force transcode (audio): set `audio.force_transcode_audio` to force audio re-encoding even when codec/container already match (disables stream-copy optimization)
+- Optional limits: max_resolution/max_fps/max_bitrate_kbps are applied by codec handlers (see [`core/codecs.py`](core/codecs.py))
+- Optional USDB settings integration: use_usdb_resolution/use_usdb_fps can read values from USDB Syncer settings for display and per-file transcode operations (see [`core.transcoder._apply_limits()`](core/transcoder.py:921))
   - Batch note: batch candidate discovery uses your configured general.max_resolution/general.max_fps values directly. If you leave those as null, videos that only exceed USDB limits will not appear as batch candidates
 
 ## Audio codec support (standalone audio)
@@ -208,31 +211,31 @@ What you need
 - FFMPEG build that includes QSV encoders/decoders (e.g., h264_qsv, hevc_qsv)
 
 How it behaves
-- Global-only controls: toggle [config.GeneralConfig.hardware_encoding](config.py:106) and [config.GeneralConfig.hardware_decode](config.py:106) to affect all codecs
-- Auto-selection: when hardware encoding is enabled, the addon selects the best available accelerator via [hwaccel.get_best_accelerator()](hwaccel.py:79)
-- Current support: Intel QuickSync only, implemented by [hwaccel.QuickSyncAccelerator](hwaccel.py:121). The architecture permits future accelerators
-- AV1 behavior: if targeting AV1 and hardware encoding is enabled, QSV is used when available; otherwise encoding falls back to software AV1 encoders (prefers libsvtav1, then libaom-av1). Encoder selection code path: [codecs.AV1Handler.build_encode_command()](codecs.py:521)
+- Global-only controls: toggle [`core.config.GeneralConfig.hardware_encoding`](core/config.py:153) and [`core.config.GeneralConfig.hardware_decode`](core/config.py:153) to affect all codecs
+- Auto-selection: when hardware encoding is enabled, the addon selects the best available accelerator via [`core.hwaccel.get_best_accelerator()`](core/hwaccel.py:79)
+- Current support: Intel QuickSync only, implemented by [`core.hwaccel.QuickSyncAccelerator`](core/hwaccel.py:121). The architecture permits future accelerators
+- AV1 behavior: if targeting AV1 and hardware encoding is enabled, QSV is used when available; otherwise encoding falls back to software AV1 encoders (prefers libsvtav1, then libaom-av1). Encoder selection code path: [`core.codecs.AV1Handler.build_encode_command()`](core/codecs.py:521)
 
 Note: If you set max_resolution or max_fps, the addon may disable hardware decoding for that run to avoid hardware decode + filter pipeline issues, while still using hardware encoding when possible.
 
 ## Live progress, abort, and enhanced logging
 
 What you will see during a transcode
-- The addon parses FFMPEG stderr in real time to extract progress from lines like time=HH:MM:SS.xx. Parsing helpers: [utils.parse_ffmpeg_progress()](utils.py:77), [utils.time_to_seconds()](utils.py:54)
-- Progress is logged roughly every 5 seconds in this format: Transcoding: 45% complete (1:23 / 3:00) [fps=..., speed=...]. Logging occurs inside [transcoder._execute_ffmpeg()](transcoder.py:296) when it encounters time=...
-- Before the encode starts, the log includes video properties and the exact FFMPEG command. See [transcoder.process_video()](transcoder.py:41)
+- The addon parses FFMPEG stderr in real time to extract progress from lines like time=HH:MM:SS.xx.
+- Progress is logged roughly every 10% completion. Logging occurs inside [`core.transcoder._execute_ffmpeg()`](core/transcoder.py:715) when it encounters time=...
+- Before the encode starts, the log includes video properties and the exact FFMPEG command. See [`core.transcoder.process_video()`](core/transcoder.py:459)
   - Example entries: Analyzing video..., Video analysis: codec=..., resolution=..., FFMPEG command: ..., Transcoding video (...)
-- On completion, a summary is printed with total wall time and approximate realtime speed. See completion log in [transcoder.process_video()](transcoder.py:285)
+- On completion, a summary is printed with total wall time and approximate realtime speed.
 
 How to abort an in-progress transcode
-- Click Abort in USDB Syncer. The addon observes both single-transcode and batch-transcode abort sources via [utils.is_aborted()](utils.py:84)
-- Abort attempts graceful termination of the active FFmpeg process. Response time is usually quick but can be delayed if FFmpeg isn't producing output. The system will attempt SIGTERM then force-kill if needed. Implementation: [transcoder._execute_ffmpeg()](transcoder.py:297)
-- Partial outputs are cleaned automatically: temporary .transcoding* files are removed on abort or failure in [transcoder.process_video()](transcoder.py:189) and [transcoder.process_video()](transcoder.py:213)
-- Batch transcode uses the same underlying termination behavior for the active FFmpeg process: worker integration in [BatchWorker](batch_worker.py:1)
+- Click Abort in USDB Syncer. The addon observes both single-transcode and batch-transcode abort sources.
+- Abort attempts graceful termination of the active FFmpeg process. Response time is usually quick but can be delayed if FFmpeg isn't producing output. The system will attempt SIGTERM then force-kill if needed. Implementation: [`core.transcoder._execute_ffmpeg()`](core/transcoder.py:715)
+- Partial outputs are cleaned automatically: temporary .transcoding* files are removed on abort or failure.
+- Batch transcode uses the same underlying termination behavior for the active FFmpeg process via the batch worker in [`batch/worker.py`](batch/worker.py).
 
 Notes
 - Abort response is usually quick, but can be delayed if FFmpeg isn't producing output.
-- The general timeout still applies as a hard cap: [config.GeneralConfig.timeout_seconds](config.py:76). On timeout, the process is terminated in [transcoder._execute_ffmpeg()](transcoder.py:396)
+- The general timeout still applies as a hard cap: `general.timeout_seconds`. On timeout, the process is terminated in [`core.transcoder._execute_ffmpeg()`](core/transcoder.py:715)
 
 Performance expectation
 - On modest Intel iGPU hardware, a 3-minute video typically encodes in about 1 minute with H.264 QuickSync
@@ -269,35 +272,35 @@ How backups are discovered
     - `transcoder_audio_source_fname` (audio)
   - If present and the file exists, it is treated as the backup
 - If not present, it searches for files next to the active video that match: <active_video_stem><backup_suffix>*
-  - The backup_suffix is configured in [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and defaults to -source
-    - Example with default suffix: MySong.mp4 → MySong-source.mkv or MySong-source.mp4
-  - Discovery and validation logic: [backup_manager.py](backup_manager.py)
+   - The backup_suffix is configured in [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and defaults to -source
+     - Example with default suffix: MySong.mp4 → MySong-source.mkv or MySong-source.mp4
+  - Discovery and validation logic: [`core/backup_manager.py`](core/backup_manager.py)
   
   Access
-  - Tools → Manage Media Backups... → [backup_dialog_orchestrator.BackupDialogOrchestrator.start_workflow()](backup_dialog_orchestrator.py:93)
+  - Tools → Manage Media Backups → [`gui/backup/dialog_orchestrator.py`](gui/backup/dialog_orchestrator.py)
   
   Unified phases
   1) Scan
      - A small progress dialog scans your library for backups. You can cancel the scan
   2) Select
      - A table lists each discovered backup with columns: Title, Artist, Backup File, Size, Date
-     - Includes per-row checkboxes, a text filter, Select All / Deselect All, and live Selected count
-     - Dialog implementation: [backup_selection_dialog.py](backup_selection_dialog.py)
-     - The dialog provides two actions so you can decide after selecting: Delete Selected or Restore Selected
+  - Includes per-row checkboxes, a text filter, Select All / Deselect All, and live Selected count
+      - Dialog implementation: [`gui.backup.selection_dialog.BackupSelectionDialog`](gui/backup/selection_dialog.py)
+      - The dialog provides two actions so you can decide after selecting: Delete Selected or Restore Selected
   3) Confirm (depends on chosen action)
      - Delete: shows how many files will be deleted and the total space to be freed
      - Restore: warns that active videos will be overwritten and that a safety backup of the current video will be created first
   4) Execute
-     - Delete: per-file deletion with progress and Cancel — UI: [backup_deletion_progress_dialog.py](backup_deletion_progress_dialog.py)
-     - Restore: per-file restoration with progress and Cancel — UI: [backup_restore_progress_dialog.py](backup_restore_progress_dialog.py)
+     - Delete: per-file deletion with progress and Cancel — UI: [`gui/backup/deletion_progress_dialog.py`](gui/backup/deletion_progress_dialog.py)
+     - Restore: per-file restoration with progress and Cancel — UI: [`gui/backup/restore_progress_dialog.py`](gui/backup/restore_progress_dialog.py)
   5) Results
-     - Delete: summary of succeeded/failed deletions and space freed — UI: [backup_deletion_results_dialog.py](backup_deletion_results_dialog.py)
-     - Restore: summary of successfully restored/failed items — UI: [backup_restore_results_dialog.py](backup_restore_results_dialog.py)
+     - Delete: summary of succeeded/failed deletions and space freed — UI: [`gui/backup/deletion_results_dialog.py`](gui/backup/deletion_results_dialog.py)
+     - Restore: summary of successfully restored/failed items — UI: [`gui/backup/restore_results_dialog.py`](gui/backup/restore_results_dialog.py)
   
   Restore behavior and safeguards
   - What restore does: replaces the active transcoded video with the selected backup file
-  - Safety backup (temporary): before replacement, the current active video is saved next to it with a .safety-[timestamp] suffix; creation occurs in [backup_manager.restore_backup()](backup_manager.py:207), naming at [backup_manager.restore_backup()](backup_manager.py:231). This safety backup is automatically deleted after a successful restore
-  - Metadata update: after restoration, the song’s sync data is updated to reflect the active filename and stored source reference in [backup_manager.restore_backup()](backup_manager.py:246)
+  - Safety backup (temporary): before replacement, the current active video is saved next to it with a .safety-[timestamp] suffix.
+  - Metadata update: after restoration, the song’s sync data is updated to reflect the active filename and stored source reference.
   - Backup deletion: after a successful restore, the selected backup file is deleted. Keep a separate copy of the backup file if you want the option to restore again later
 - Space stats: the dialog always shows Total Space to Reclaim; during restore it is informational only
 
@@ -311,7 +314,7 @@ Deletion safeguards (unchanged)
 
 Scope and limitations
 - Affects only persistent user backups created alongside your song files using the configured backup_suffix
-- Does not touch temporary rollback backups created by Batch Media Transcode; those live in a separate system temp folder managed by [rollback.py](rollback.py)
+- Does not touch temporary rollback backups created by Batch Media Transcode; those live in a separate system temp folder managed by [`batch/rollback.py`](batch/rollback.py)
 - Respects your current backup_suffix setting when searching by pattern; exact matches saved in sync data are honored even if you later change the suffix
 
 Tip: To reduce future backup accumulation, you can disable keeping new originals by setting general.backup_original to false in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). This does not affect existing backups; use the manager to remove or restore them.
@@ -323,19 +326,19 @@ Common fixes and checks are documented in [docs/TROUBLESHOOTING.md](docs/TROUBLE
 ## Technical details (for advanced users)
 
 High-level flow
-1) Analyze with [video_analyzer.analyze_video()](video_analyzer.py:58)
-2) Decide if work is needed via [video_analyzer.needs_transcoding()](video_analyzer.py:198). This step performs strict matching against your configured settings (profile, pixel format, and general caps). See decision rules summarized above and implementation in [video_analyzer.py](video_analyzer.py).
-3) Build the FFMPEG command from the codec handler: [codecs.H264Handler](codecs.py:105), [codecs.VP8Handler](codecs.py:216), [codecs.HEVCHandler](codecs.py:305), [codecs.VP9Handler](codecs.py:409), [codecs.AV1Handler](codecs.py:501)
-4) Optionally enable hardware decode/encode via [hwaccel.get_best_accelerator()](hwaccel.py:79) and [hwaccel.QuickSyncAccelerator](hwaccel.py:121)
-5) Execute and verify; then update sync metadata and the song’s #VIDEO tag via [sync_meta_updater.update_sync_meta_video()](sync_meta_updater.py:25)
+1) Analyze with [`core/video_analyzer.py`](core/video_analyzer.py)
+2) Decide if work is needed using strict matching against your configured settings
+3) Build the FFMPEG command from the codec handler in [`core/codecs.py`](core/codecs.py)
+4) Optionally enable hardware decode/encode via accelerators in [`core/hwaccel.py`](core/hwaccel.py)
+5) Execute and verify; then update sync metadata and the song’s #VIDEO tag via [`core/sync_meta_updater.py`](core/sync_meta_updater.py)
 
 Entry points and config
-- Hook: USDB Syncer hooks system triggers [transcoder.process_video()](transcoder.py:41)
-- Configuration dataclass: [config.TranscoderConfig](config.py:91)
-- Batch module: [batch.py](batch.py)
+- Hook: USDB Syncer hooks system triggers [`core.transcoder.process_video()`](core/transcoder.py:459)
+- Configuration dataclass: [`core/config.py`](core/config.py)
+- Batch module: [`batch/batch.py`](batch/batch.py)
 
 Sync tracking (critical)
-- USDB_Syncer uses file mtime to decide if resources are in sync. The addon updates filenames and mtimes accordingly to prevent re-download loops. Details: [sync_meta_updater.py](sync_meta_updater.py)
+- USDB_Syncer uses file mtime to decide if resources are in sync. The addon updates filenames and mtimes accordingly to prevent re-download loops. Details: [`core/sync_meta_updater.py`](core/sync_meta_updater.py)
 
 ## FAQ
 
@@ -345,6 +348,7 @@ Sync tracking (critical)
 - Does it transcode standalone audio? Yes, when SyncMeta includes an audio file and audio transcoding is enabled in settings.
 - Which container will I get? Defaults are H.264 → .mp4, VP8/VP9 → .webm, HEVC → .mp4, AV1 → .mkv, but you can override per-codec container via the `container` config key.
 - Where is the config file? The runtime config is stored in the USDB Syncer data directory as `transcoder_config.json` (created on first run by [config.load_config()](config.py:157)).
+- Where is the config file? The runtime config is stored in the USDB Syncer data directory as `transcoder_config.json` (created on first run by [`core.config.load_config()`](core/config.py:204)).
   - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
   - macOS: `~/Library/Application Support/bohning/usdb_syncer/transcoder_config.json`
   - Linux: `~/.local/share/bohning/usdb_syncer/transcoder_config.json`
@@ -359,9 +363,9 @@ When does the addon skip transcoding?
 - Only when the input already matches your configured target codec and its checked settings, and does not exceed any configured limits (resolution, FPS, bitrate). For H.264, that includes profile/pixel_format; for HEVC, profile/pixel_format; for VP8/VP9/AV1, the codec must match.
 
 New in this version — progress and abort
-- Can I abort a running transcode? Yes. Click Abort in USDB Syncer. The addon detects the abort via [utils.is_aborted()](utils.py:84) and attempts to terminate the active FFmpeg process
+- Can I abort a running transcode? Yes. Click Abort in USDB Syncer. The addon detects the abort via [`core.utils.is_aborted()`](core/utils.py:118) and attempts to terminate the active FFmpeg process
 - How quickly does abort take effect? Response time is usually quick, but can be delayed if FFmpeg isn't producing output
-- Will partial files be left behind? No. Temporary .transcoding* files are removed on abort or failure in [transcoder.process_video()](transcoder.py:189) and [transcoder.process_video()](transcoder.py:213)
+- Will partial files be left behind? No. Temporary .transcoding* files are removed on abort or failure in [`core.transcoder.process_video()`](core/transcoder.py:459)
 - Does batch transcode respect abort? Yes. The active video is stopped immediately and the batch ends; rollback is offered if enabled
 
 ## Development

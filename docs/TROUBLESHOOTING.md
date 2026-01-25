@@ -19,7 +19,7 @@ Path is defined by the USDB Syncer application paths utility.
 ## Where are my settings stored?
 
 Recommended editing method
-- Use the GUI: **Tools → Transcoder Settings**
+- Use the GUI: **Tools → Media Transcoder Settings**
 
 Runtime config file location (advanced)
 - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
@@ -41,7 +41,7 @@ Audio note
 2) Failed to analyze video file
 - Cause: ffprobe could not parse the source file
 - Fix: Ensure the downloaded file is a valid video. Try re-downloading the song. Check that your FFMPEG installation works
-- Where it happens: analysis in [video_analyzer.analyze_video()](../video_analyzer.py:60)
+- Where it happens: analysis in [`core.video_analyzer.analyze_video()`](../core/video_analyzer.py:60)
 
 2a) Failed to analyze audio file / no audio stream found
 - Cause: ffprobe could not parse the file, or the file has no audio stream
@@ -49,17 +49,17 @@ Audio note
   - Ensure the downloaded file is valid audio (or a container with an audio stream)
   - Re-download the song
   - Verify ffprobe can read the file
-- Where it happens: analysis in [audio_analyzer.analyze_audio()](../audio_analyzer.py:41)
+- Where it happens: analysis in [`core.audio_analyzer.analyze_audio()`](../core/audio_analyzer.py:43)
 
 3) Insufficient disk space for transcoding
 - Cause: Free space below min_free_space_mb
 - Fix: Free up disk space or lower general.min_free_space_mb in **Tools → Transcoder Settings** (or by editing the runtime config file listed above)
- - Check setting: [config.GeneralConfig](../config.py:106)
+ - Check setting: [`core.config.GeneralConfig`](../core/config.py:153)
 
 4) FFMPEG encoding failed or FFMPEG timeout after Ns
 - Cause: Encoder error or operation exceeded general.timeout_seconds
 - Fix: Try a faster preset or higher CRF. Verify your FFMPEG build supports the selected encoder (e.g., h264_qsv). Increase timeout_seconds if needed
-- Where it happens: command execution in [transcoder.process_video()](../transcoder.py:41)
+- Where it happens: command execution in [`core.transcoder.process_video()`](../core/transcoder.py:459)
 
 4a) Audio codec encoder missing (libmp3lame / libvorbis / libopus)
 - Symptoms:
@@ -83,7 +83,7 @@ Audio note
 5) Transcoded output verification failed
 - Cause: Output was produced but could not be parsed by ffprobe
 - Fix: Re-try with verify_output left enabled. Consider a different preset/CRF, or switch to H.264 for maximum compatibility
-- Verification step occurs after encode in [transcoder.process_video()](../transcoder.py:41)
+- Verification step occurs after encode in [`core.transcoder.process_video()`](../core/transcoder.py:459)
 
 5a) Transcoded audio output verification failed
 - Cause: Output was produced but ffprobe could not read it, or duration is invalid
@@ -91,20 +91,20 @@ Audio note
   - Keep `general.verify_output` enabled
   - Try a different audio codec/container (AAC/MP3/Vorbis/Opus)
   - Verify your FFmpeg build can both encode and decode the chosen format
-- Verification step occurs after encode in [transcoder.process_audio()](../transcoder.py:41)
+- Verification step occurs after encode in [`core.transcoder.process_audio()`](../core/transcoder.py:42)
 
 6) Could not backup original
 - Cause: File permission issues or destination in use
-- Fix: Close media players, ensure write permissions on the song folder. Originals are renamed to name-source.ext using the suffix from [config.GeneralConfig.backup_suffix](../config.py:72)
+- Fix: Close media players, ensure write permissions on the song folder. Originals are renamed to name-source.ext using the suffix from [`core.config.GeneralConfig.backup_suffix`](../core/config.py:153)
 
 7) Could not update .txt #VIDEO header
 - Cause: The song text file couldn’t be modified
-- Fix: Ensure the .txt is writable. The update is performed by [sync_meta_updater.update_txt_video_header()](../sync_meta_updater.py:130)
+- Fix: Ensure the .txt is writable. The update is performed by [`core.sync_meta_updater.update_txt_video_header()`](../core/sync_meta_updater.py:226)
 
 8) Hardware encoding requested but no suitable accelerator found. Falling back to software
-- Cause: No supported accelerator detected (only Intel QuickSync is currently supported) while [config.GeneralConfig.hardware_encoding](../config.py:106) is enabled
-- Fix: Ensure an Intel iGPU with drivers is present and your FFMPEG build includes QSV encoders (h264_qsv, hevc_qsv, vp9_qsv, av1_qsv). Otherwise, encoding proceeds in software. You can also disable hardware encoding globally via [config.GeneralConfig.hardware_encoding](../config.py:106)
-- Detection/selection logic: [hwaccel.get_best_accelerator()](../hwaccel.py:79), QuickSync implementation [hwaccel.QuickSyncAccelerator](../hwaccel.py:121)
+- Cause: No supported accelerator detected (only Intel QuickSync is currently supported) while `general.hardware_encoding` is enabled
+- Fix: Ensure an Intel iGPU with drivers is present and your FFMPEG build includes QSV encoders (h264_qsv, hevc_qsv, vp9_qsv, av1_qsv). Otherwise, encoding proceeds in software. You can also disable hardware encoding globally.
+- Detection/selection logic: [`core.hwaccel.get_best_accelerator()`](../core/hwaccel.py:79), QuickSync implementation [`core.hwaccel.QuickSyncAccelerator`](../core/hwaccel.py:121)
 
 ## Abort during transcode
 
@@ -114,16 +114,16 @@ Symptoms
 - Abort seems to take longer than expected
 
 Explanation
-- Abort attempts graceful termination of the active FFmpeg process. Response time is usually quick but can be delayed if FFmpeg isn't producing output. The system attempts SIGTERM and then force-kills if needed. Implementation: [transcoder._execute_ffmpeg()](../transcoder.py:297)
+- Abort attempts graceful termination of the active FFmpeg process. Response time is usually quick but can be delayed if FFmpeg isn't producing output. The system attempts SIGTERM and then force-kills if needed. Implementation: [`core.transcoder._execute_ffmpeg()`](../core/transcoder.py:715)
 - In a batch operation, selected videos that weren't processed are marked Aborted. Unselected videos are not included in the results report. If you choose rollback, successfully transcoded videos are restored and marked Rolled Back.
 
 What to do
 - Response time is usually quick, but can be delayed if FFmpeg isn't producing output. Give the UI a moment to refresh
 - If it has not stopped after a couple of seconds, check the log for Transcode aborted by user and any FFmpeg shutdown messages
-- If FFMPEG becomes unresponsive, the general timeout still applies as a hard cap: [config.GeneralConfig.timeout_seconds](../config.py:76). On timeout, the process is terminated in [transcoder._execute_ffmpeg()](../transcoder.py:396)
+- If FFMPEG becomes unresponsive, the general timeout still applies as a hard cap: `general.timeout_seconds`. On timeout, the process is terminated in [`core.transcoder._execute_ffmpeg()`](../core/transcoder.py:715)
 
 Cleanup behavior
-- Temporary .transcoding* files are removed automatically on abort or failure: cleanup paths in [transcoder.process_video()](../transcoder.py:189) and [transcoder.process_video()](../transcoder.py:213). Completed outputs remain. If rollback is enabled, you will be prompted to restore processed videos
+- Temporary .transcoding* files are removed automatically on abort or failure. Completed outputs remain. If rollback is enabled, you will be prompted to restore processed media
 
 ## Why was my already-H.264 (or HEVC/VP8) video transcoded?
 
@@ -142,9 +142,9 @@ What you can do
 ## How to check hardware encoding status
 
 From logs
-- When active, you will see a message about hardware encoding being used. Otherwise, a warning about falling back to software appears from [transcoder.process_video()](../transcoder.py:41)
+- When active, you will see a message about hardware encoding being used. Otherwise, a warning about falling back to software appears from [`core.transcoder.process_video()`](../core/transcoder.py:459)
 
-Note: If you set general.max_resolution or general.max_fps, the addon may disable hardware decoding for that run (it will log this decision) to avoid hardware decode + filter pipeline issues, while keeping hardware encoding enabled when possible. Control these via [config.GeneralConfig.hardware_decode](../config.py:106) and [config.GeneralConfig.hardware_encoding](../config.py:106).
+Note: If you set general.max_resolution or general.max_fps, the addon may disable hardware decoding for that run (it will log this decision) to avoid hardware decode + filter pipeline issues, while keeping hardware encoding enabled when possible.
 
 AV1 specifics
 - With hardware encoding enabled, AV1 uses QSV when available; otherwise it falls back to software encoders in order: libsvtav1 → libaom-av1. If your FFMPEG lacks SVT-AV1, expect libaom-av1 or software-only operation
@@ -154,11 +154,12 @@ AV1 specifics
 If you already have a library of downloaded songs and want to convert them in bulk:
 - Use the GUI menu: Tools → Batch Media Transcode
 - A preview and selection dialog appears with filtering and live statistics
-  - Orchestrator and preview: [batch_orchestrator.py](../batch_orchestrator.py), [batch_preview_dialog.py](../batch_preview_dialog.py)
-  - Progress and abort: [batch_progress_dialog.py](../batch_progress_dialog.py)
-  - Results and export: [batch_results_dialog.py](../batch_results_dialog.py) (summarizes succeeded/failed/aborted among selected items; rollback status may appear when rollback is used)
-  - Estimation and space checks: [batch_estimator.py](../batch_estimator.py)
-  - Optional rollback protection: [rollback.py](../rollback.py)
+  - Orchestrator: [`batch/orchestrator.py`](../batch/orchestrator.py)
+  - Preview dialog: [`gui/batch/preview_dialog.py`](../gui/batch/preview_dialog.py)
+  - Progress and abort: [`gui/batch/progress_dialog.py`](../gui/batch/progress_dialog.py)
+  - Results and export: [`gui/batch/results_dialog.py`](../gui/batch/results_dialog.py)
+  - Estimation and space checks: [`batch/estimator.py`](../batch/estimator.py)
+  - Optional rollback protection: [`batch/rollback.py`](../batch/rollback.py)
 
 Common issues in the new workflow
 
@@ -168,7 +169,7 @@ Common issues in the new workflow
   - Let the initial scan complete once; subsequent runs are faster with fewer candidates
   - Reduce the number of candidates by tightening your configuration so fewer videos qualify
   - Ensure ffprobe is on a fast local disk and your antivirus is not scanning video files
-- Where it happens: preview generation in [BatchTranscodeOrchestrator._generate_preview()](../batch_orchestrator.py:180), analysis in [video_analyzer.analyze_video()](../video_analyzer.py:60)
+- Where it happens: preview generation in [`batch.orchestrator.BatchTranscodeOrchestrator._generate_preview()`](../batch/orchestrator.py:259), analysis in [`core.video_analyzer.analyze_video()`](../core/video_analyzer.py:60)
 
 2) Disk space estimate seems inaccurate
 - Explanation: Estimates are heuristic and based on codec, CRF, resolution, and bitrate limits
@@ -176,7 +177,7 @@ Common issues in the new workflow
   - Verify your CRF and preset choices; higher quality settings increase size
   - If you have max_bitrate_kbps set, the estimate will clamp to that value
   - Leave extra headroom beyond the estimate; the dialog disables Start if free space is below the required total
-- Implementation: [BatchEstimator.estimate_output_size()](../batch_estimator.py:19), [BatchEstimator.calculate_disk_space_required()](../batch_estimator.py:200)
+- Implementation: see [`batch/estimator.py`](../batch/estimator.py)
 
 3) Rollback didn’t restore all videos
 - Cause:
@@ -186,7 +187,7 @@ Common issues in the new workflow
   - Re-run the batch and enable rollback protection in the preview dialog
   - Check the log for missing backup warnings during rollback
   - If permanent backups are enabled via configuration, verify originals with the configured suffix still exist
-- Implementation: [RollbackManager.rollback_all()](../rollback.py:90), manifest handling in [RollbackManager.enable_rollback()](../rollback.py:66)
+- Implementation: [`RollbackManager.rollback_all()`](../batch/rollback.py:153), manifest handling in [`RollbackManager.enable_rollback()`](../batch/rollback.py:70)
 
 4) Export to CSV failed
 - Cause: Destination not writable or file locked by another application
@@ -194,14 +195,14 @@ Common issues in the new workflow
   - Choose a writable location (e.g., your Documents folder)
   - Close any application holding the CSV open and retry
   - Retry with a different filename
-- Implementation: [BatchResultsDialog._export_to_csv()](../batch_results_dialog.py:180)
+- Implementation: see [`gui/batch/results_dialog.py`](../gui/batch/results_dialog.py)
 
 5) Progress window does not update or abort seems delayed
 - Explanation: UI updates depend on encoder output cadence, so the UI can lag even when an abort has been requested
 - Fix:
   - Give the UI a moment to refresh after the abort
   - If it does not stop within a couple of seconds, check the log for Transcode aborted by user and any FFmpeg shutdown messages
-- Implementation: [BatchWorker.video_progress](../batch_worker.py:31), abort path [BatchTranscodeOrchestrator.abort_batch()](../batch_orchestrator.py:393) and [BatchTranscodeOrchestrator._handle_abort()](../batch_orchestrator.py:363)
+- Implementation: progress is emitted by [`batch/worker.py`](../batch/worker.py) and abort is handled by the orchestrator in [`batch/orchestrator.py`](../batch/orchestrator.py)
 
 From command line
 - List hardware encoders: ffmpeg -encoders | findstr qsv (Windows) or ffmpeg -encoders | grep qsv (macOS/Linux)
@@ -218,7 +219,7 @@ Symptoms
 
 What restore does
 - Replaces the active transcoded video with the selected backup file
-- Before replacement, the current active video is saved alongside it with a .safety-[timestamp] suffix; creation occurs in [backup_manager.restore_backup()](../backup_manager.py:231). This safety backup is temporary and is automatically deleted after a successful restore
+- Before replacement, the current active media is saved alongside it with a .safety-[timestamp] suffix; creation occurs in [`core.backup_manager.restore_backup()`](../core/backup_manager.py:288). This safety backup is temporary and is automatically deleted after a successful restore
 - After a successful restore, the selected backup file is deleted. If you want the option to restore again later, keep a separate copy of the backup file
 
 Common issues and fixes
@@ -243,7 +244,7 @@ Access
 ## Videos won’t play
 
  Try these steps
-- Set target_codec to h264 in **Tools → Transcoder Settings** (or in the runtime config file) and use high profile, pixel_format yuv420p in [config.H264Config](../config.py:19). With strict matching, the addon will convert non-conforming inputs to these exact settings
+- Set target_codec to h264 in **Tools → Media Transcoder Settings** (or in the runtime config file) and use high profile, pixel_format yuv420p in your H.264 settings. With strict matching, the addon will convert non-conforming inputs to these exact settings
 - Ensure the file extension is .mp4 and the song’s #VIDEO header points to the new filename
 - Confirm the addon updated metadata: the original was renamed to name-source.ext and the new file exists
 - Re-run the download so the addon processes the video again
@@ -284,7 +285,7 @@ Fixes
   - Windows: `ffmpeg -filters | findstr loudnorm`
 
 Where it happens
-- Two-pass analysis and filter injection in [audio_normalizer.analyze_loudnorm_two_pass()](../audio_normalizer.py:134) and [audio_normalizer.maybe_apply_audio_normalization()](../audio_normalizer.py:241)
+- Two-pass analysis and filter injection in [`core/audio_normalizer.py`](../core/audio_normalizer.py)
 
 ### ReplayGain tagging doesn’t show up in my player
 
@@ -295,6 +296,24 @@ Explanation
 Fixes
 - Prefer loudnorm if you need consistent loudness across players.
 - Verify your player supports ReplayGain for the chosen format.
+
+### Verification appears to do nothing
+
+Symptoms
+
+- You enabled “Verify normalization before transcoding”, but the log does not mention verification.
+- Audio is always normalized (or always transcoded) even when you expect skipping.
+
+What to check
+
+1. Confirm the setting is enabled in the Transcoder settings dialog.
+2. Look for verification-related lines in the log around the song processing.
+
+Notes
+
+- Verification runs to decide whether **normalization work** is necessary.
+- Verification can run even when the addon must transcode due to codec/container mismatch (for example, `aac/.m4a` to `vorbis/.ogg`). In that case, a “within tolerance” result means the addon should transcode **without** applying normalization.
+- For `replaygain` method, loudness consistency depends on player support for ReplayGain tags.
 
 ## Audio quality issues
 
@@ -330,7 +349,7 @@ Include the following in your report
 - USDB_Syncer version and OS
 - CPU/GPU details (especially whether you have Intel QuickSync)
 - The contents of the Transcoder runtime config file `transcoder_config.json` (especially auto_transcode_enabled)
-  - Preferred: Open **Tools → Transcoder Settings** and copy relevant settings
+  - Preferred: Open **Tools → Media Transcoder Settings** and copy relevant settings
   - If you need to find the file on disk:
     - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
     - macOS: `~/Library/Application Support/bohning/usdb_syncer/transcoder_config.json`
@@ -339,8 +358,8 @@ Include the following in your report
 - The exact error message (copy from the log)
 
 Where to look in code
-- Transcode pipeline: [transcoder.process_video()](../transcoder.py:41)
-- Analysis: [video_analyzer.analyze_video()](../video_analyzer.py:58)
-- Codec command builders: [codecs.py](../codecs.py)
-- Hardware selection: [hwaccel.get_best_accelerator()](../hwaccel.py:79), [hwaccel.QuickSyncAccelerator](../hwaccel.py:121)
-- Sync updates: [sync_meta_updater.update_sync_meta_video()](../sync_meta_updater.py:25)
+- Transcode pipeline: [`core/transcoder.py`](../core/transcoder.py)
+- Analysis: [`core/video_analyzer.py`](../core/video_analyzer.py)
+- Codec command builders: [`core/codecs.py`](../core/codecs.py)
+- Hardware selection: [`core.hwaccel.get_best_accelerator()`](../core/hwaccel.py:79), [`core.hwaccel.QuickSyncAccelerator`](../core/hwaccel.py:121)
+- Sync updates: [`core.sync_meta_updater.update_sync_meta_video()`](../core/sync_meta_updater.py:25)

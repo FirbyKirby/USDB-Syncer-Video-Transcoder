@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from usdb_syncer.usdb_song import UsdbSong
 
 # Import addon modules
-from . import config, transcoder
+from .core import config, transcoder
 
 # Phase 1: Ensure config exists at load time
 config.load_config()
@@ -35,8 +35,8 @@ _backup_mgmt_action = None
 def on_download_finished(song: UsdbSong) -> None:
     """Process media after song download completes.
 
-    Stage 2 adds audio support. Video processing remains the default behavior
-    and audio processing is attempted when SyncMeta includes an audio file.
+    Video processing remains the default behavior and audio processing is attempted
+    when SyncMeta includes an audio file.
     """
     slog = song_logger(song.song_id)
 
@@ -103,7 +103,7 @@ def _register_gui_hooks() -> None:
         from usdb_syncer.gui import events, icons
         from usdb_syncer.gui.progress import run_with_progress
 
-        from .batch_orchestrator import BatchTranscodeOrchestrator
+        from .batch.orchestrator import BatchTranscodeOrchestrator
     except Exception:  # noqa: BLE001
         # If PySide isn't available (headless mode) or imports fail, skip GUI hook.
         return
@@ -122,7 +122,7 @@ def _register_gui_hooks() -> None:
         global _settings_action, _batch_action, _backup_mgmt_action
 
         def open_settings() -> None:
-            from .settings_gui import show_settings
+            from .gui.settings_gui import show_settings
 
             show_settings(main_window)
 
@@ -132,7 +132,7 @@ def _register_gui_hooks() -> None:
             orchestrator.start_batch_workflow()
 
         def manage_backups() -> None:
-            from .backup_dialog_orchestrator import BackupDialogOrchestrator
+            from .gui.backup.dialog_orchestrator import BackupDialogOrchestrator
             orchestrator = BackupDialogOrchestrator(main_window)
             orchestrator.start_workflow()
 
@@ -159,7 +159,7 @@ _register_gui_hooks()
 
 # Prune orphaned cache entries once per app launch (F6a recommendation)
 try:
-    from .loudness_cache import get_cache_path, LoudnessCache
+    from .core.loudness_cache import get_cache_path, LoudnessCache
     cache_path = get_cache_path()
     cache = LoudnessCache(cache_path)
     success = cache.prune_orphans()

@@ -2,6 +2,8 @@
 
 This document describes the release process for the `transcoder` addon.
 
+Note: This addon is pre-release. Treat this as maintainer documentation.
+
 ## Tag Nomenclature
 
 Releases are triggered by pushing a git tag to the repository. The tag should follow semantic versioning and be prefixed with a `v`.
@@ -25,14 +27,15 @@ Example tags:
 
 ## Workflow Details
 
-Once a tag matching `v*` is pushed, a GitHub Actions workflow (`release.yml`) is automatically triggered.
+Once a tag matching `v*` is pushed, a GitHub Actions workflow (see [`.github/workflows/release.yml`](../.github/workflows/release.yml)) is automatically triggered.
 
 The workflow performs the following steps:
 1. **Checkout**: Downloads the repository content.
-2. **Package**: Creates a zip file named `transcoder.zip`.
-   - The zip file contains a root directory named `transcoder/`.
-   - All addon files (Python files, `docs/`, `LICENSE`, `README.md`) are placed inside this directory.
-   - Developer-only files (like `docs/RELEASE.md`), configuration files (`config.json`), and git-related files are excluded.
+ 2. **Package**: Creates a zip file named `transcoder.zip`.
+    - The zip file contains a root directory named `transcoder/`.
+    - The addon’s Python package must include the current module layout (for example `core/`, `batch/`, `gui/`, `workers/`).
+    - User documentation under `docs/` is included.
+    - Developer-only markdown files in the repo root are typically excluded.
 3. **Release**: Creates a new GitHub Release.
    - The release is named after the tag (e.g., `v1.0.0`).
    - The `transcoder.zip` file is uploaded as a release asset.

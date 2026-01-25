@@ -3,7 +3,7 @@
 This guide explains every configuration option, default values, recommended settings, and provides ready-to-use examples for common goals.
 
 Where the file lives
-- The runtime config is created on addon load in the USDB Syncer data directory as `transcoder_config.json` by [config.load_config()](../config.py:157).
+- The runtime config is created on addon load in the USDB Syncer data directory as `transcoder_config.json` by [`core.config.load_config()`](../core/config.py:204).
 - Exact path varies by platform:
   - Windows: `C:\Users\<username>\AppData\Local\bohning\usdb_syncer\transcoder_config.json`
   - macOS: `~/Library/Application Support/bohning/usdb_syncer/transcoder_config.json`
@@ -19,22 +19,23 @@ Note: JSON does not support comments. Examples below include only the keys you n
 
 ## Top-level structure
 
-Options are defined by [config.TranscoderConfig](../config.py:134):
+Options are defined by [`core.config.TranscoderConfig`](../core/config.py:179):
 - version: configuration schema version (int)
 - auto_transcode_enabled: enable/disable automatic video transcoding after song downloads (bool)
 - target_codec: which codec to encode to: h264, hevc, vp8, vp9, or av1
-- h264: H.264-specific options from [config.H264Config](../config.py:19)
-- hevc: HEVC-specific options from [config.HEVCConfig](../config.py:37)
-- vp8: VP8-specific options from [config.VP8Config](../config.py:29)
-- vp9: VP9-specific options from [config.VP9Config](../config.py:47)
-- av1: AV1-specific options from [config.AV1Config](../config.py:56)
-- audio: standalone audio transcoding options from [config.AudioConfig](../config.py:67)
-- general: global options from [config.GeneralConfig](../config.py:106)
-- usdb_integration: optional USDB Syncer settings integration from [config.UsdbIntegrationConfig](../config.py:83)
+- h264: H.264-specific options from [`core.config.H264Config`](../core/config.py:22)
+- hevc: HEVC-specific options from [`core.config.HEVCConfig`](../core/config.py:40)
+- vp8: VP8-specific options from [`core.config.VP8Config`](../core/config.py:32)
+- vp9: VP9-specific options from [`core.config.VP9Config`](../core/config.py:50)
+- av1: AV1-specific options from [`core.config.AV1Config`](../core/config.py:59)
+- audio: standalone audio transcoding options from [`core.config.AudioConfig`](../core/config.py:67)
+- general: global options from [`core.config.GeneralConfig`](../core/config.py:153)
+- usdb_integration: optional USDB Syncer settings integration from [`core.config.UsdbIntegrationConfig`](../core/config.py:171)
+- verification: normalization verification options from [`core.config.VerificationConfig`](../core/config.py:121)
 
 ## Option reference and defaults
 
-H.264 block [config.H264Config](../config.py:19)
+H.264 block [`core.config.H264Config`](../core/config.py:22)
 - profile: baseline, main, or high. Default: high
 - pixel_format: output pixel format. Default: yuv420p
 - crf: quality control (lower = higher quality). Default: 18
@@ -42,30 +43,30 @@ H.264 block [config.H264Config](../config.py:19)
 - preset: encoder speed/quality tradeoff. Default: fast
 - container: output container extension. Default: mp4
 
-HEVC block [config.HEVCConfig](../config.py:37)
+HEVC block [`core.config.HEVCConfig`](../core/config.py:40)
 - profile: main or main10. Default: main
 - pixel_format: output pixel format. Default: yuv420p
 - crf: quality control (lower = higher quality). Default: 18
 - preset: encoder speed/quality tradeoff. Default: faster
 - container: output container extension. Default: mp4
 
-VP8 block [config.VP8Config](../config.py:29)
+VP8 block [`core.config.VP8Config`](../core/config.py:32)
 - crf: quality control (lower = higher quality). Default: 10
 - cpu_used: speed/quality tradeoff: 0-5 (lower is higher quality, slower). Default: 4
 - container: output container extension. Default: webm
 
-VP9 block [config.VP9Config](../config.py:47)
+VP9 block [`core.config.VP9Config`](../core/config.py:50)
 - crf: quality control (lower = higher quality). Default: 20
 - cpu_used: speed/quality tradeoff: 0-8. Default: 4
 - deadline: good, best, or realtime. Default: good
 - container: output container extension. Default: webm
 
-AV1 block [config.AV1Config](../config.py:56)
+AV1 block [`core.config.AV1Config`](../core/config.py:59)
 - crf: quality control (lower = higher quality). Default: 20
 - cpu_used: speed/quality tradeoff: 0-13. Default: 8
 - container: output container extension. Default: mkv
 
-General block [config.GeneralConfig](../config.py:106)
+General block [`core.config.GeneralConfig`](../core/config.py:153)
 - hardware_encoding: enable hardware encoding if available. Default: true
 - hardware_decode: allow hardware decoders. Default: true
   - ⚠️ **Hardware Decode Limitation:** Hardware decoding is primarily intended for use with hardware encoding. Using hardware decode with software encode may cause pipeline issues.
@@ -74,7 +75,7 @@ General block [config.GeneralConfig](../config.py:106)
 - timeout_seconds: max time to allow FFMPEG to run. Default: 600
 - verify_output: analyze output after encode; deletes bad outputs. Default: true
 - force_transcode_video (boolean, default: false): When enabled, forces transcoding of all videos even if they already match the target codec and quality settings. Affects both single-file and batch operations
-- force_transcode_audio (boolean, default: false): When enabled, forces re-transcoding of audio even if codec/container match; disables stream-copy optimization
+- force_transcode_audio: this setting lives under `audio.force_transcode_audio` (not `general`). See Audio block below.
 - min_free_space_mb: abort if free space below this value. Default: 500
 - max_resolution: optional resolution rule. Default: null
 - max_fps: optional FPS rule. Default: null
@@ -88,16 +89,16 @@ Resolution and FPS behavior (important)
 Note: Hardware decoding is automatically disabled when both hardware encoding is enabled and resolution/FPS filters are requested (max_resolution and/or max_fps), to avoid decoder/encoder compatibility issues.
 
 Timeout and abort behavior
-- [config.GeneralConfig.timeout_seconds](../config.py:76) remains the maximum wall-clock duration for a single FFMPEG run, regardless of live progress reporting
-- Abort attempts graceful termination of the active FFmpeg process. Response time is usually quick but can be delayed if FFmpeg isn't producing output. If FFmpeg does not exit, the system will force-kill; timeout_seconds still terminates the process in [transcoder._execute_ffmpeg()](../transcoder.py:396)
+- `general.timeout_seconds` remains the maximum wall-clock duration for a single FFMPEG run, regardless of live progress reporting
+- Abort attempts graceful termination of the active FFmpeg process. If FFmpeg does not exit, the system will force-kill; `timeout_seconds` still terminates the process in [`core.transcoder._execute_ffmpeg()`](../core/transcoder.py:715)
 
-USDB integration block [config.UsdbIntegrationConfig](../config.py:83)
+USDB integration block [`core.config.UsdbIntegrationConfig`](../core/config.py:171)
 - use_usdb_resolution: if true, uses USDB Syncer Settings → Video max resolution. Default: true
 - use_usdb_fps: if true, uses USDB Syncer Settings → Video max FPS. Default: true
 
 Warning: If you disable verify_output, corrupt outputs may slip through if FFMPEG succeeds but writes an unreadable file.
 
-## Audio block (standalone audio) [config.AudioConfig](../config.py:67)
+## Audio block (standalone audio) [`core.config.AudioConfig`](../core/config.py:67)
 
 This section controls transcoding and normalization of **standalone audio files referenced by SyncMeta**.
 
@@ -135,6 +136,8 @@ Containers (how the output filename extension is chosen)
 - `mp3` → `.mp3`
 - `vorbis` → `.ogg`
 - `opus` → `.opus`
+
+Note: for AAC, `.mp4` is also treated as container-compatible for stream-copy operations.
 
 Codec selection recommendations
 
@@ -196,6 +199,21 @@ Smart skipping behavior
 - **ReplayGain**: Files that match the target codec/container are checked for existing ReplayGain tags. If tags are present, transcoding is skipped.
 - To force re-normalization, enable `force_transcode_audio`.
 
+### Normalization targets: USDB defaults vs explicit values
+
+The addon supports two target modes:
+
+- `audio_normalization_use_usdb_defaults` (boolean, default: true)
+  - When true, the addon uses USDB Syncer-aligned targets:
+    - Opus output: `-23.0` LUFS
+    - Other outputs: `-18.0` LUFS
+  - True peak and LRA use FFmpeg defaults.
+
+- When false, the addon uses explicit targets from:
+  - `audio_normalization_target` (LUFS)
+  - `audio_normalization_true_peak` (dBTP)
+  - `audio_normalization_lra` (LU)
+
 - `audio_normalization_target` (number, default: -18.0)
   - Target integrated loudness in **LUFS**.
   - More negative is quieter.
@@ -228,12 +246,20 @@ Trade-off
 
 - Verification requires decoding the whole file (typically **about realtime**), so it can add **2–5 minutes per song** depending on duration and hardware.
 
+## Verification block (standalone audio loudness verification)
+
+This section controls whether the addon should measure loudness first to decide whether normalization is needed.
+
 #### Enable verification
 
 - `verification.enabled` (boolean, default: false)
   - Enables normalization verification for standalone audio processing.
-  - When enabled, the addon can verify loudness and skip normalization/transcoding when the file is **within tolerance**.
-  - Verification uses FFmpeg `loudnorm` in analysis mode (pass-1 measurement) and compares the results to your targets.
+  - When enabled, verification runs even if a transcode is required for codec/container reasons.
+  - Verification is used to decide whether **normalization work** is necessary.
+    - If the file is **within tolerance**, the addon skips normalization.
+    - If the file is **out of tolerance**, the addon proceeds with normalization.
+  - For `audio_normalization_method: loudnorm`, verification uses FFmpeg `loudnorm` in analysis mode and compares the results to your targets.
+  - For `audio_normalization_method: replaygain`, verification evaluates ReplayGain state (tags and/or computed loudness) against the configured target.
 
 Note
 
@@ -279,6 +305,10 @@ Verification measurements are cached in a local **SQLite database** so repeat ru
 
 - First verification of a file: slow (full decode)
 - Later verification: fast (cache hit) if the file has not changed
+
+Reuse during normalization
+
+- When verification determines a file is out of tolerance for `loudnorm`, the addon can reuse the verification measurements for the normalization run (so the loudnorm analysis does not have to run twice).
 
 The cache is automatically invalidated when:
 
@@ -344,20 +374,20 @@ The backup manager uses your configuration to find persistent user backups creat
   - With the default suffix -source, examples include MySong-source.mp4 or MySong-source.mkv
 - Safety checks: the active video is never considered a backup, and missing or non-file paths are ignored
 - Suffix changes: exact filenames stored in sync data are honored even if you later change backup_suffix; pattern-based discovery uses the current backup_suffix value
-- Scope: only persistent backups in your song folders are targeted. Temporary rollback backups from batch transcoding live in a system temp directory managed by [rollback.py](../rollback.py) and are not affected
+- Scope: only persistent backups in your song folders are targeted. Temporary rollback backups from batch transcoding live in a system temp directory managed by [`batch/rollback.py`](../batch/rollback.py) and are not affected
 
 Restore-specific behavior
 - What restore does: replaces the active transcoded video with the selected backup file
-- Safety backup: just before replacement, the current active video is saved alongside it with a .safety-[timestamp] suffix. Implementation: [backup_manager.restore_backup()](../backup_manager.py:231)
+ - Safety backup: just before replacement, the current active media is saved alongside it with a .safety-[timestamp] suffix. Implementation: [`core.backup_manager.restore_backup()`](../core/backup_manager.py:288)
 
 Tip: To stop creating new persistent backups, set general.backup_original to false. Existing backups remain on disk until removed or restored via Tools → Manage Media Backups... (choose Delete Selected or Restore Selected in the selection dialog).
 
 ### Hardware acceleration behavior
 
-- Two global toggles govern all codecs: [config.GeneralConfig.hardware_encoding](../config.py:106) and [config.GeneralConfig.hardware_decode](../config.py:106)
-- When hardware encoding is enabled, the addon auto-selects the best available accelerator via [hwaccel.get_best_accelerator()](../hwaccel.py:79)
-- Currently supported accelerator: Intel QuickSync, implemented by [hwaccel.QuickSyncAccelerator](../hwaccel.py:121)
-- AV1 auto-selection: AV1 attempts QSV first; if unavailable, falls back to software encoders in order: libsvtav1 → libaom-av1. See [codecs.AV1Handler.build_encode_command()](../codecs.py:521)
+- Two global toggles govern all codecs: `general.hardware_encoding` and `general.hardware_decode`
+- When hardware encoding is enabled, the addon auto-selects the best available accelerator via [`core.hwaccel.get_best_accelerator()`](../core/hwaccel.py:79)
+- Currently supported accelerator: Intel QuickSync, implemented by [`core.hwaccel.QuickSyncAccelerator`](../core/hwaccel.py:121)
+- AV1 auto-selection: AV1 attempts QSV first; if unavailable, falls back to software encoders in order: libsvtav1 → libaom-av1. See [`core.codecs.AV1Handler.build_encode_command()`](../core/codecs.py:530)
 
 Note: Hardware decoding is automatically disabled when both hardware encoding is enabled and resolution/FPS filters are requested (max_resolution and/or max_fps), to avoid decoder/encoder compatibility issues.
 
@@ -509,14 +539,14 @@ The following shows all keys. Values reflect defaults unless noted.
 ```
 
 Implementation details
- - The encode commands are built by codec handlers in [codecs.py](../codecs.py) and executed from [transcoder.process_video()](../transcoder.py:41)
- - Hardware accelerator selection is managed via [hwaccel.get_best_accelerator()](../hwaccel.py:79) and implemented for QuickSync by [hwaccel.QuickSyncAccelerator](../hwaccel.py:121)
- - Sync meta and #VIDEO updates are handled by [sync_meta_updater.update_sync_meta_video()](../sync_meta_updater.py:25)
+ - The encode commands are built by codec handlers in [`core/codecs.py`](../core/codecs.py) and executed from [`core.transcoder.process_video()`](../core/transcoder.py:459)
+ - Hardware accelerator selection is managed via [`core.hwaccel.get_best_accelerator()`](../core/hwaccel.py:79) and implemented for QuickSync by [`core.hwaccel.QuickSyncAccelerator`](../core/hwaccel.py:121)
+ - Sync meta and #VIDEO updates are handled by [`core.sync_meta_updater.update_sync_meta_video()`](../core/sync_meta_updater.py:25)
 
 Batch transcoding
-- Use Tools → Batch Media Transcode to launch the dialog-driven workflow. The workflow is orchestrated by [batch_orchestrator.py](../batch_orchestrator.py) and presented through:
-  - Preview and selection: [batch_preview_dialog.py](../batch_preview_dialog.py)
-  - Real-time progress and abort: [batch_progress_dialog.py](../batch_progress_dialog.py)
-  - Results reporting and export: [batch_results_dialog.py](../batch_results_dialog.py)
-  - Estimation and space checks: [batch_estimator.py](../batch_estimator.py)
-  - Optional rollback protection: [rollback.py](../rollback.py)
+- Use Tools → Batch Media Transcode to launch the dialog-driven workflow. The workflow is orchestrated by [`batch/orchestrator.py`](../batch/orchestrator.py) and presented through:
+  - Preview and selection: [`gui/batch/preview_dialog.py`](../gui/batch/preview_dialog.py)
+  - Real-time progress and abort: [`gui/batch/progress_dialog.py`](../gui/batch/progress_dialog.py)
+  - Results reporting and export: [`gui/batch/results_dialog.py`](../gui/batch/results_dialog.py)
+  - Estimation and space checks: [`batch/estimator.py`](../batch/estimator.py)
+  - Optional rollback protection: [`batch/rollback.py`](../batch/rollback.py)

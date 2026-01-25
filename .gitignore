@@ -4,3 +4,4 @@ __pycache__/
 .kilocode/
 .DS_Store
 logs/
+plans/

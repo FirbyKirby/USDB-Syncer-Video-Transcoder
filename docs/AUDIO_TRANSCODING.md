@@ -93,6 +93,17 @@ Recommended
 
 Normalization aims to make tracks play at a consistent perceived loudness.
 
+This addon supports two different behaviors depending on how you configure targets:
+
+- **Use USDB Syncer defaults (recommended)**: when `audio.audio_normalization_use_usdb_defaults` is true, the addon uses USDB Syncer-aligned targets:
+  - Opus output: `-23.0` LUFS
+  - Other outputs: `-18.0` LUFS
+  - True peak and LRA use FFmpeg defaults
+- **Use explicit targets**: when `audio.audio_normalization_use_usdb_defaults` is false, the addon uses your configured targets:
+  - `audio.audio_normalization_target` (LUFS)
+  - `audio.audio_normalization_true_peak` (dBTP)
+  - `audio.audio_normalization_lra` (LU)
+
 ## Audio Normalization Verification
 
 Normalization verification checks whether a track is already normalized *well enough* to match your configured loudness targets, before spending time re-encoding it.
@@ -112,6 +123,11 @@ When verification is enabled, the addon:
    - **Within tolerance**: close enough to the targets → the addon can skip normalization/transcoding.
    - **Out of tolerance**: not close enough → the addon proceeds with normalization (and any required transcoding).
 
+Important nuance
+
+- Verification is about whether **normalization work** is needed.
+- Even when verification is **within tolerance**, the addon may still need to transcode for other reasons (for example, codec/container mismatch like `aac/.m4a` → `vorbis/.ogg`). In that case it will transcode **without** applying normalization.
+
 Tolerance presets are designed to match perceptual thresholds (based on EBU R128 / common loudness guidance), so small differences that are rarely audible do not force unnecessary work.
 
 For details, including preset meanings and advanced custom tolerances, see [`docs/CONFIGURATION.md`](CONFIGURATION.md).
@@ -121,7 +137,8 @@ For details, including preset meanings and advanced custom tolerances, see [`doc
 Verification can happen in two places:
 
 1. **Automatic processing after download** (opt-in)
-   - If `verification.enabled` is enabled, newly downloaded standalone audio can be verified before normalization/transcoding.
+   - If `verification.enabled` is enabled, newly downloaded standalone audio can be verified before normalization.
+   - Verification runs even if the addon has already determined the file must be transcoded due to codec/container mismatch.
 
 2. **Batch wizard verification** (opt-in per run)
    - In the **batch wizard**, verification happens during the optional **Verification** step (labeled Analysis in the UI).
@@ -154,12 +171,17 @@ The cache is invalidated automatically when the file changes (for example, diffe
 
 ### Smart skipping behavior
 
-The addon intelligently skips transcoding when normalization is already applied.
+The addon intelligently skips work when normalization is already applied.
 
-- **R128 (loudnorm)**: Files that match the target codec/container are assumed to be already normalized and transcoding is skipped.
-- **ReplayGain**: Files that match the target codec/container are checked for existing ReplayGain tags. If tags are present, transcoding is skipped.
+- When verification is **disabled**:
+  - **R128 (loudnorm)**: files that match the target codec/container are assumed to already be normalized and transcoding is skipped.
+  - **ReplayGain**: files that match the target codec/container are checked for existing ReplayGain tags. If tags are present, transcoding is skipped.
 
-If you enable normalization verification (`verification.enabled`), the addon can make a more accurate decision for loudnorm by measuring loudness and checking whether the file is **within tolerance**.
+- When verification is **enabled** (`verification.enabled: true`):
+  - The addon verifies normalization even if a transcode is required for format reasons.
+  - If the file is **within tolerance**, the addon skips normalization.
+    - If no other transcode reason exists, it skips transcoding too.
+    - If codec/container mismatch exists, it transcodes but does not apply normalization.
 
 To force re-normalization of files that would otherwise be skipped, enable `force_transcode_audio` in settings.
 
@@ -173,9 +195,11 @@ flowchart TD
   C -->|No| D[Transcode only if codec or container mismatches]
   C -->|Yes| E{Verification enabled}
   E -->|No| F[Normalize and transcode based on settings]
-  E -->|Yes| G[Measure loudness and compare to targets]
+  E -->|Yes| G[Verify normalization (measure or tag-check)]
   G --> H{Within tolerance}
-  H -->|Yes| I[Skip normalization and transcode]
+  H -->|Yes| I{Transcode required for codec or container}
+  I -->|No| K[Skip normalization and skip transcode]
+  I -->|Yes| L[Transcode only (no normalization)]
   H -->|No| J[Normalize and transcode]
 ```
 
@@ -207,6 +231,11 @@ How it works
 
 - Writes ReplayGain tags into the output when the container/player supports it.
 - When format matches target: checks for existing ReplayGain tags, skips transcoding if present.
+
+Verification behavior
+
+- When verification is enabled, the addon does not just check for tag presence.
+- It can detect cases where ReplayGain tags exist but appear to be based on a different target than your current configuration. In that case, it treats the file as needing normalization work.
 
 Why you'd use it
 
